@@ -79,14 +79,17 @@ class PPOMemory:
 
 class Agent(nn.Module):
     def __init__(self, n_actions, c1, c2, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
-                 policy_clip=0.2, batch_size=64, N=2048, n_epochs=10):
+                 policy_clip=0.2, batch_size=64, N=2048, n_epochs=10, LR=0.01):
         
+        super(Agent, self).__init__()
         self.gamma = gamma
         self.policy_clip = policy_clip
         self.n_epochs = n_epochs
+        self.n_actions = n_actions
         self.gae_lambda = gae_lambda
         self.c1 = c1
         self.c2 = c2
+        
         self.batch_size = batch_size
 
         # An interesting note - implementations exist where actor and critic share 
@@ -99,19 +102,22 @@ class Agent(nn.Module):
         the distribution 'pi_old' 
         '''
         self.actor = self._create_model(input_dims, n_actions)
+        self.optimizer_actor = T.optim.Adam(self.actor.parameters(), LR)
 
         self.critic = self._create_model(input_dims, 1)
+        self.optimizer_critic = T.optim.Adam(self.critic.parameters(), LR)
         self.memory = PPOMemory(batch_size)
 
     def _create_model(self, input_dims, output_dims):
         ''' private function meant to create the same model with varying input/output dims. '''
-        return nn.Sequential(
+        model = nn.Sequential(
             nn.Linear(input_dims, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, output_dims)
         )
+        return model
 
     def remember(self, state, action, probs, vals, reward, done):
         self.memory.store_memory(state, action, probs, vals, reward, done)
@@ -119,6 +125,9 @@ class Agent(nn.Module):
     def get_vf(self, x):
         ''' retrieve the value function for that state as determined by critic. '''
         return self.critic.forward(x)
+    
+    def get_gae(self, reward, vf_t, vf_t1):
+        return reward - self.gamma*vf_t1 + vf_t
     
     def get_action_and_vf(self, x):
         ''' get distribution over actions and associated vf '''
@@ -129,11 +138,11 @@ class Agent(nn.Module):
 
     def learn(self):
         # retrieve memories from last batch
-        state_tens = T.tensor(self.memory.states)
+        state_tens = T.stack(self.memory.states)
         act_logprob_tens = T.tensor(self.memory.logprobs)
         adv_tensor = T.tensor(self.memory.adv)
         vals_tens = T.tensor(self.memory.vals)
-        act_tens = self.memory.actions
+        act_tens = T.tensor(self.memory.actions)
         rew_tens = self.memory.rewards
         done_tens = T.tensor(self.memory.dones)
 
@@ -165,19 +174,25 @@ class Agent(nn.Module):
 
         #           --- Critic Loss ---
 
-        # MSE over the advantages
-        crit_loss = nn.functional.mse_loss(adv_tensor)
+        # sum over the advantages
+        crit_loss = T.sum(policy_loss)
 
         #           --- Total Loss ---
 
-        loss = policy_loss + self.c_1*crit_loss + self.c_2*entropy_loss
+        loss = policy_loss + self.c1*crit_loss + self.c2*entropy_loss
 
         # backward pass
-        self.optimizer.zero_grad()
         loss.backward()
-        
 
-        pass
+        self.optimizer_actor.zero_grad()
+        self.optimizer_actor.step()
+
+        self.optimizer_critic.zero_grad()
+        self.optimizer_critic.step()
+
+        return loss
+
+        
 
 
 ##A
