@@ -46,6 +46,9 @@ import torch as T
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
+import time
+
+device = T.device("cuda" if T.cuda.is_available() else "cpu")
 
 class PPOMemory:
     def __init__(self, batch_size):
@@ -78,35 +81,38 @@ class PPOMemory:
         self.dones = []
 
 class Agent(nn.Module):
-    def __init__(self, n_actions, c1, c2, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
-                 policy_clip=0.2, batch_size=64, N=2048, n_epochs=10, LR=0.01):
-        
-        super(Agent, self).__init__()
-        self.gamma = gamma
-        self.policy_clip = policy_clip
-        self.n_epochs = n_epochs
-        self.n_actions = n_actions
-        self.gae_lambda = gae_lambda
-        self.c1 = c1
-        self.c2 = c2
-        
-        self.batch_size = batch_size
-
         # An interesting note - implementations exist where actor and critic share 
         # the same NN, differentiated by a singular layer at the end. 
         # food for thought.
+    
+    def __init__(self, n_actions, c1, c2, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
+                 policy_clip=0.2, batch_size=64, n_epochs=10, LR=5e-4):
         
-        '''
-        Our actor loss works by comparing our old distribution by our new distribution, then 
-        multiplying by our advantage function. For this to work, we need somewhere to store
-        the distribution 'pi_old' 
-        '''
+        super(Agent, self).__init__()
+
+        #           --- Hyperparams ---
+        self.gamma = gamma
+        self.policy_clip = policy_clip
+        self.gae_lambda = gae_lambda
+        self.c1 = c1
+        self.c2 = c2
+        self.batch_size = batch_size
+        self.n_epochs = n_epochs
+        self.n_actions = n_actions
+
+        #           --- Actor Critic ---
         self.actor = self._create_model(input_dims, n_actions)
         self.optimizer_actor = T.optim.Adam(self.actor.parameters(), LR)
 
         self.critic = self._create_model(input_dims, 1)
         self.optimizer_critic = T.optim.Adam(self.critic.parameters(), LR)
+
+        #           --- Memory ---
         self.memory = PPOMemory(batch_size)
+
+        #           --- Misc ---
+        self.criterion = nn.MSELoss()
+    
 
     def _create_model(self, input_dims, output_dims):
         ''' private function meant to create the same model with varying input/output dims. '''
@@ -119,15 +125,16 @@ class Agent(nn.Module):
         )
         return model
 
-    def remember(self, state, action, probs, vals, reward, done):
-        self.memory.store_memory(state, action, probs, vals, reward, done)
-
     def get_vf(self, x):
         ''' retrieve the value function for that state as determined by critic. '''
         return self.critic.forward(x)
     
     def get_gae(self, reward, vf_t, vf_t1):
-        return reward - self.gamma*vf_t1 + vf_t
+        ''' As seen here: https://arxiv.org/pdf/1506.02438.pdf
+            An estimation for the advantage function. 
+            GAE = r_t - gamma*lambda*vf_(t+1) + vf(t)
+        '''
+        return reward - self.gamma*self.gae_lambda*vf_t1 + vf_t
     
     def get_action_and_vf(self, x):
         ''' get distribution over actions and associated vf '''
@@ -136,15 +143,25 @@ class Agent(nn.Module):
         action = probs.sample()
         return action, probs.log_prob(action), probs.entropy(), self.critic.forward(x)
 
-    def learn(self):
+    def learn(self, new_state):
         # retrieve memories from last batch
         state_tens = T.stack(self.memory.states)
         act_logprob_tens = T.tensor(self.memory.logprobs)
         adv_tensor = T.tensor(self.memory.adv)
-        vals_tens = T.tensor(self.memory.vals)
+        vals_tens = T.tensor(self.memory.vals, dtype=T.float64)
         act_tens = T.tensor(self.memory.actions)
-        rew_tens = self.memory.rewards
+        rew_tens = T.tensor(self.memory.rewards)
         done_tens = T.tensor(self.memory.dones)
+        self.memory.clear_memory()
+
+        #print(state_tens, '\n')
+        #print(act_logprob_tens, '\n')
+        #print(adv_tensor, '\n')
+        #print(vals_tens, '\n')
+        #print(act_tens, '\n')
+        #print(rew_tens, '\n')
+        #time.sleep(20)
+
 
         # clear our memory for the next batch
         self.memory.clear_memory()
@@ -158,7 +175,7 @@ class Agent(nn.Module):
         prob_of_action = new_probs.log_prob(act_tens)
 
         # Entropy Loss
-        entropy_loss = -T.mean(new_probs.entropy())
+        entropy_loss = T.mean(new_probs.entropy())
 
         # Get probability raio
         prob_ratios = T.exp(prob_of_action - act_logprob_tens)
@@ -170,16 +187,30 @@ class Agent(nn.Module):
         clip_min =  T.tensor(1-self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)   
 
         # policy loss
-        policy_loss = min(T.mean(prob_ratios*adv_tensor), T.mean(T.clamp(prob_ratios, clip_min, clip_max)*adv_tensor))
+        policy_loss = T.min(T.mean(prob_ratios*adv_tensor), T.mean(T.clamp(prob_ratios, clip_min, clip_max)*adv_tensor))
 
         #           --- Critic Loss ---
 
-        # sum over the advantages
-        crit_loss = T.sum(policy_loss)
+        # sum over the rewards to get returns
+        bootstrap = self.critic(new_state).detach()
+        
+        returns = T.cat([rew_tens, bootstrap])
+        returns = T.flip(returns, dims=(0,))
+
+        returns = T.cumsum(returns, dim=0)
+        returns = T.flip(returns, dims=(0,))
+
+        returns = (returns - returns.mean()) / (returns.std() + 1e-7)
+        
+        crit_loss = self.criterion(vals_tens, returns[:64])
+
+        print("policy loss", policy_loss)
+        print("crit_loss: ", crit_loss)
+        print("entropy loss ", entropy_loss)
 
         #           --- Total Loss ---
 
-        loss = policy_loss + self.c1*crit_loss + self.c2*entropy_loss
+        loss = -policy_loss + self.c1*crit_loss - self.c2*entropy_loss
 
         # backward pass
         loss.backward()
