@@ -107,7 +107,7 @@ class Agent(nn.Module):
         # the same NN, differentiated by a singular layer at the end. 
         # food for thought.
     
-    def __init__(self, n_actions, c1, c2, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
+    def __init__(self, n_actions, c1, c2, input_dims, gamma=0.99, gae_lambda=0.95,
                  policy_clip=0.2, batch_size=64, buffer_size=64*10, n_epochs=10, LR=1e-3):
         
         super(Agent, self).__init__()
@@ -135,7 +135,6 @@ class Agent(nn.Module):
 
         #           --- Misc ---
         self.criterion = nn.MSELoss()
-        self.ts = 0
     
 
     def _create_model(self, input_dims, output_dims):
@@ -185,6 +184,11 @@ class Agent(nn.Module):
 
         #           --- Actor and Entropy Loss ---
 
+        # Scale our advantage functions for better convergence
+        #print(adv_tensor)
+        #adv_tensor = (adv_tensor - adv_tensor.mean()) / adv_tensor.std()
+        #print(adv_tensor)
+
         # Send our state through our actors
         new_probs = Categorical(logits=self.actor(state_tens))
 
@@ -203,8 +207,8 @@ class Agent(nn.Module):
         # Clip Min Tensor
         clip_min =  T.tensor(1-self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)  
 
-        print("clamped Policies: ", T.clamp(prob_ratios, clip_min, clip_max))
-        print("non clamped policies: ", prob_ratios)
+        #print("clamped Policies: ", T.clamp(prob_ratios, clip_min, clip_max))
+        #print("non clamped policies: ", prob_ratios)
 
         # policy loss
         policy_loss = T.min((prob_ratios*adv_tensor), T.clamp(prob_ratios, clip_min, clip_max)*adv_tensor)
@@ -221,17 +225,19 @@ class Agent(nn.Module):
         returns = T.cumsum(returns, dim=0)
         returns = T.flip(returns, dims=(0,))
 
-        returns = (returns - returns.mean()) / (returns.std() + 1e-7)
+        returns = (returns - returns.mean()) / (returns.std())
+        approx_val = T.flatten(self.critic.forward(state_tens))
         
-        crit_loss = self.criterion(vals_tens, returns[:64])
+        crit_loss = T.tensor(self.criterion(approx_val, returns[:64]), dtype=T.float32)
 
         #           --- Total Loss ---
 
         loss = -policy_loss + self.c1*crit_loss - self.c2*entropy_loss
 
-        #print('policy_loss: ', policy_loss)
-        #print('crit loss: ', crit_loss)
+        print('policy_loss: ', policy_loss)
+        print('crit loss: ', crit_loss)
         #print('entropy loss: ', entropy_loss)
+        print(loss)
 
         # backward pass
         loss.backward()
@@ -240,10 +246,7 @@ class Agent(nn.Module):
         self.optimizer_critic.step()
 
         # Exponential Decay on C2
-        self.c2 *= 0.99
-
-        # Making sure the memory works as it is supposed to
-        print(len(self.memory.states))
+        self.c2 *= 0.999
 
         return policy_loss.detach(), crit_loss.detach(), loss.detach()
 

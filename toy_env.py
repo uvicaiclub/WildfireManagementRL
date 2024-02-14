@@ -8,11 +8,12 @@ from PPOExample import Agent as PPO
 env = gym.make("LunarLander-v2", render_mode='human')
 
 
-observation, info = env.reset(seed=42)
+episode_seed = np.random.randint(0, 100)
+observation, info = env.reset(seed=episode_seed)
 
-EPOCHS = 10
+EPOCHS = 25
 
-PPO_Agent = PPO(n_actions=4, c1=1.0, c2=0.01, input_dims=8, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
+PPO_Agent = PPO(n_actions=4, c1=1.0, c2=0.01, input_dims=8, gamma=0.99, gae_lambda=0.95,
                  policy_clip=0.2, batch_size=64, buffer_size=64*5, n_epochs=10, LR=1e-4)
 
 action = env.action_space.sample()
@@ -21,7 +22,6 @@ obs, rewards, dones, info, _ = env.step(action)
 full_episode_loss = []
 avg_policy_loss = []
 avg_crit_loss = []
-
 
 obs = T.tensor(obs)
 for episode in range(10):
@@ -39,7 +39,7 @@ for episode in range(10):
         PPO_Agent.memory.store_memory(prev_obs, action, log_prob, advantage, prev_vf, rewards, dones)
 
         if dones == True:
-            env.reset(seed=42)
+            env.reset(seed=episode_seed)
 
         if len(PPO_Agent.memory.states) >= 64*5:
             for _ in range(5):
@@ -58,8 +58,8 @@ for episode in range(10):
     avg_crit_loss.append(episode_crit_loss/EPOCHS)
     avg_policy_loss.append(episode_policy_loss/EPOCHS)
 
-    env.reset(seed=42)
-
+    episode_seed = np.random.randint(0, 100)
+    env.reset(seed=episode_seed)
 
 env.close()
 print(full_episode_loss)

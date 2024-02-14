@@ -9,11 +9,16 @@
 
     Implemented:
     # Exponential Decay on C2
-        self.c2 = 0.1*0.98*self.ts
-        self.ts += 1
+        self.c2 *= 0.98
 
     Current Hyperparameters are: 
     EPOCHS = 10
 
     PPO_Agent = PPO(n_actions=4, c1=1.0, c2=0.01, input_dims=8, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
                     policy_clip=0.2, batch_size=64, buffer_size=64*5, n_epochs=10, LR=1e-4)
+
+
+2'nd main test:
+    In an attempt to prevent memorization/overfitting, I'm changing the random seed every episode. 
+    I changed exponential decay to the one above after noting a large flaw in the last exponential decay function.
+    I also am normalizing advantages, 
