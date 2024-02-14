@@ -1,0 +1,19 @@
+1'st main test:
+    One of the main things I'm seeing is that we want to add a parameter buffer_size, meant to be a multiple of batch_size and 
+    meant to serve as a training buffer. In essense, we add a buffer size corresponding to a sufficient number of steps such
+    that we have n number of batches to train on all at once. Right now, buffer_size = 10*batch_size.
+
+    Another crutial detail is that the way we calculate entropy doesn't decrease wrt time. This is a massive problem
+    as we would expect the agent would pick more suitable moves as the agent learns. To counteract this, we're going to 
+    introduce exponential decay on the value c2. 
+
+    Implemented:
+    # Exponential Decay on C2
+        self.c2 = 0.1*0.98*self.ts
+        self.ts += 1
+
+    Current Hyperparameters are: 
+    EPOCHS = 10
+
+    PPO_Agent = PPO(n_actions=4, c1=1.0, c2=0.01, input_dims=8, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
+                    policy_clip=0.2, batch_size=64, buffer_size=64*5, n_epochs=10, LR=1e-4)

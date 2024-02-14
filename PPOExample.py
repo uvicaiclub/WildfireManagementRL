@@ -80,13 +80,35 @@ class PPOMemory:
         self.rewards = []
         self.dones = []
 
+    def get_memory_batch(self):
+        ''' Returns a memory batch of size batch_size. '''
+
+        # retrieves the 64 states
+        states_T = T.stack(self.states[:64])
+        act_logprob_tens = T.tensor(self.logprobs[:64])
+        adv_tensor = T.tensor(self.adv[:64])
+        vals_tens = T.tensor(self.vals[:64], dtype=T.float64)
+        act_tens = T.tensor(self.actions[:64])
+        rew_tens = T.tensor(self.rewards[:64])
+
+        # removes the first 64 states
+        del self.states[:64]
+        del self.logprobs[:64]
+        del self.adv[:64]
+        del self.vals[:64]
+        del self.actions[:64]
+        del self.rewards[:64]
+
+        return states_T, act_logprob_tens, adv_tensor, vals_tens, act_tens, rew_tens
+
+
 class Agent(nn.Module):
         # An interesting note - implementations exist where actor and critic share 
         # the same NN, differentiated by a singular layer at the end. 
         # food for thought.
     
     def __init__(self, n_actions, c1, c2, input_dims, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
-                 policy_clip=0.2, batch_size=64, n_epochs=10, LR=5e-4):
+                 policy_clip=0.2, batch_size=64, buffer_size=64*10, n_epochs=10, LR=1e-3):
         
         super(Agent, self).__init__()
 
@@ -96,6 +118,7 @@ class Agent(nn.Module):
         self.gae_lambda = gae_lambda
         self.c1 = c1
         self.c2 = c2
+        self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.n_epochs = n_epochs
         self.n_actions = n_actions
@@ -112,6 +135,7 @@ class Agent(nn.Module):
 
         #           --- Misc ---
         self.criterion = nn.MSELoss()
+        self.ts = 0
     
 
     def _create_model(self, input_dims, output_dims):
@@ -145,14 +169,11 @@ class Agent(nn.Module):
 
     def learn(self, new_state):
         # retrieve memories from last batch
-        state_tens = T.stack(self.memory.states)
-        act_logprob_tens = T.tensor(self.memory.logprobs)
-        adv_tensor = T.tensor(self.memory.adv)
-        vals_tens = T.tensor(self.memory.vals, dtype=T.float64)
-        act_tens = T.tensor(self.memory.actions)
-        rew_tens = T.tensor(self.memory.rewards)
-        done_tens = T.tensor(self.memory.dones)
-        self.memory.clear_memory()
+        state_tens, act_logprob_tens, adv_tensor, vals_tens, act_tens, rew_tens = self.memory.get_memory_batch()
+
+        # Forget gradients from last learning step
+        self.optimizer_actor.zero_grad()
+        self.optimizer_critic.zero_grad()
 
         #print(state_tens, '\n')
         #print(act_logprob_tens, '\n')
@@ -161,10 +182,6 @@ class Agent(nn.Module):
         #print(act_tens, '\n')
         #print(rew_tens, '\n')
         #time.sleep(20)
-
-
-        # clear our memory for the next batch
-        self.memory.clear_memory()
 
         #           --- Actor and Entropy Loss ---
 
@@ -184,10 +201,14 @@ class Agent(nn.Module):
         clip_max = T.tensor(1+self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)
 
         # Clip Min Tensor
-        clip_min =  T.tensor(1-self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)   
+        clip_min =  T.tensor(1-self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)  
+
+        print("clamped Policies: ", T.clamp(prob_ratios, clip_min, clip_max))
+        print("non clamped policies: ", prob_ratios)
 
         # policy loss
-        policy_loss = T.min(T.mean(prob_ratios*adv_tensor), T.mean(T.clamp(prob_ratios, clip_min, clip_max)*adv_tensor))
+        policy_loss = T.min((prob_ratios*adv_tensor), T.clamp(prob_ratios, clip_min, clip_max)*adv_tensor)
+        policy_loss = T.mean(policy_loss)
 
         #           --- Critic Loss ---
 
@@ -204,24 +225,27 @@ class Agent(nn.Module):
         
         crit_loss = self.criterion(vals_tens, returns[:64])
 
-        print("policy loss", policy_loss)
-        print("crit_loss: ", crit_loss)
-        print("entropy loss ", entropy_loss)
-
         #           --- Total Loss ---
 
         loss = -policy_loss + self.c1*crit_loss - self.c2*entropy_loss
 
+        #print('policy_loss: ', policy_loss)
+        #print('crit loss: ', crit_loss)
+        #print('entropy loss: ', entropy_loss)
+
         # backward pass
         loss.backward()
 
-        self.optimizer_actor.zero_grad()
         self.optimizer_actor.step()
-
-        self.optimizer_critic.zero_grad()
         self.optimizer_critic.step()
 
-        return loss
+        # Exponential Decay on C2
+        self.c2 *= 0.99
+
+        # Making sure the memory works as it is supposed to
+        print(len(self.memory.states))
+
+        return policy_loss.detach(), crit_loss.detach(), loss.detach()
 
         
 
