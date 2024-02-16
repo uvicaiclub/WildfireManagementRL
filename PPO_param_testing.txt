@@ -22,3 +22,23 @@
     In an attempt to prevent memorization/overfitting, I'm changing the random seed every episode. 
     I changed exponential decay to the one above after noting a large flaw in the last exponential decay function.
     I also am normalizing advantages, 
+
+3'rd main test:
+    First main change, .to(device) everything to optimize for performance. 
+    Following Implementation Matters in PPO, one of the things they suggest is having 32 minibatches, 2000 timesteps per iteration, 
+    where then these models are then trained for ~400 iterations. Before I make any further changes, I want to see where we're at in terms
+    of loss and whatnaught before I add any future changes. The first graph represents the control.
+
+    Change 1: 
+        Added a clip function to the value function loss as seen in the paper 'Implementation Matters in Deep Policy Gradients:
+        A Case Study on PPO and TRPO'
+        The second graph is the loss curve associated with that. 
+        Also changed includes a graph dictating mean reward of that episode.
+
+    Change 2: 
+        Added TanH layers to the neural network instead of relu layers. 
+        Seemed to introduce faster improvement.
+
+    Change 3:
+        Removed the subtraction of the mean from the reward scaling.
+        Let c2 = 0 as shown in the paper.

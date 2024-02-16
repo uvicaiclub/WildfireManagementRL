@@ -84,12 +84,12 @@ class PPOMemory:
         ''' Returns a memory batch of size batch_size. '''
 
         # retrieves the 64 states
-        states_T = T.stack(self.states[:64])
-        act_logprob_tens = T.tensor(self.logprobs[:64])
-        adv_tensor = T.tensor(self.adv[:64])
-        vals_tens = T.tensor(self.vals[:64], dtype=T.float64)
-        act_tens = T.tensor(self.actions[:64])
-        rew_tens = T.tensor(self.rewards[:64])
+        states_T = T.stack(self.states[:64]).to(device)
+        act_logprob_tens = T.tensor(self.logprobs[:64]).to(device)
+        adv_tensor = T.tensor(self.adv[:64]).to(device)
+        vals_tens = T.tensor(self.vals[:64], dtype=T.float64).to(device)
+        act_tens = T.tensor(self.actions[:64]).to(device)
+        rew_tens = T.tensor(self.rewards[:64]).to(device)
 
         # removes the first 64 states
         del self.states[:64]
@@ -124,10 +124,10 @@ class Agent(nn.Module):
         self.n_actions = n_actions
 
         #           --- Actor Critic ---
-        self.actor = self._create_model(input_dims, n_actions)
+        self.actor = self._create_model(input_dims, n_actions).float().to(device)
         self.optimizer_actor = T.optim.Adam(self.actor.parameters(), LR)
 
-        self.critic = self._create_model(input_dims, 1)
+        self.critic = self._create_model(input_dims, 1).float().to(device)
         self.optimizer_critic = T.optim.Adam(self.critic.parameters(), LR)
 
         #           --- Memory ---
@@ -141,9 +141,9 @@ class Agent(nn.Module):
         ''' private function meant to create the same model with varying input/output dims. '''
         model = nn.Sequential(
             nn.Linear(input_dims, 64),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(64, 64),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(64, output_dims)
         )
         return model
@@ -161,7 +161,7 @@ class Agent(nn.Module):
     
     def get_action_and_vf(self, x):
         ''' get distribution over actions and associated vf '''
-        logits = self.actor(x)
+        logits = self.actor(x.to(device))
         probs = Categorical(logits=logits)
         action = probs.sample()
         return action, probs.log_prob(action), probs.entropy(), self.critic.forward(x)
@@ -173,14 +173,6 @@ class Agent(nn.Module):
         # Forget gradients from last learning step
         self.optimizer_actor.zero_grad()
         self.optimizer_critic.zero_grad()
-
-        #print(state_tens, '\n')
-        #print(act_logprob_tens, '\n')
-        #print(adv_tensor, '\n')
-        #print(vals_tens, '\n')
-        #print(act_tens, '\n')
-        #print(rew_tens, '\n')
-        #time.sleep(20)
 
         #           --- Actor and Entropy Loss ---
 
@@ -201,6 +193,8 @@ class Agent(nn.Module):
         # Get probability raio
         prob_ratios = T.exp(prob_of_action - act_logprob_tens)
 
+        maximum_ratio = T.max(prob_ratios).detach().numpy()
+
         # Clip Max Tensor
         clip_max = T.tensor(1+self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)
 
@@ -217,7 +211,7 @@ class Agent(nn.Module):
         #           --- Critic Loss ---
 
         # sum over the rewards to get returns
-        bootstrap = self.critic(new_state).detach()
+        bootstrap = self.critic(new_state.to(device)).detach()
         
         returns = T.cat([rew_tens, bootstrap])
         returns = T.flip(returns, dims=(0,))
@@ -225,19 +219,28 @@ class Agent(nn.Module):
         returns = T.cumsum(returns, dim=0)
         returns = T.flip(returns, dims=(0,))
 
-        returns = (returns - returns.mean()) / (returns.std())
+        returns = (returns) / (returns.std())
+        returns = returns.float()
+
         approx_val = T.flatten(self.critic.forward(state_tens))
         
-        crit_loss = T.tensor(self.criterion(approx_val, returns[:64]), dtype=T.float32)
+        crit_loss = self.criterion(approx_val, returns[:64])
+
+        # Implementation detail in 'Implementation Matters in Deep Policy Gradients'
+        crit_loss_clip = T.clamp(crit_loss, 1-self.policy_clip, 1+self.policy_clip)
+        crit_loss = T.min(crit_loss, crit_loss_clip)
+        crit_loss = crit_loss.float()
 
         #           --- Total Loss ---
 
-        loss = -policy_loss + self.c1*crit_loss - self.c2*entropy_loss
+        # Implementation detail in 'Implementation Matters in Deep Policy Gradients'
+        # No entropy loss
+        loss = -policy_loss + self.c1*crit_loss # - self.c2*entropy_loss
 
-        print('policy_loss: ', policy_loss)
-        print('crit loss: ', crit_loss)
+        #print('policy_loss: ', policy_loss)
+        #print('crit loss: ', crit_loss)
         #print('entropy loss: ', entropy_loss)
-        print(loss)
+        #print(loss)
 
         # backward pass
         loss.backward()
