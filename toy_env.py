@@ -8,7 +8,6 @@ import seaborn as sns
 
 env = gym.make("LunarLander-v2")
 
-
 episode_seed = np.random.randint(0, 100)
 observation, info = env.reset(seed=episode_seed)
 
@@ -16,11 +15,12 @@ observation, info = env.reset(seed=episode_seed)
 EPOCHS = 25
 NUM_MINIBATCHES = 32
 MINIBATCH = 16
-ITERATIONS = 400
+EPISODES = 400
 TS_PER_ITER = 2000
 
-PPO_Agent = PPO(n_actions=4, c1=1.0, c2=0.01, input_dims=8, gamma=0.99, gae_lambda=0.95,
-                 policy_clip=0.2, batch_size=MINIBATCH, buffer_size=MINIBATCH*NUM_MINIBATCHES, n_epochs=ITERATIONS, LR=1e-4)
+PPO_Agent = PPO(n_actions=4, c1=1.0, c2=0.1, input_dims=8, gamma=0.99, gae_lambda=0.95,
+                 policy_clip=0.2, batch_size=MINIBATCH, buffer_size=MINIBATCH*NUM_MINIBATCHES, 
+                 n_epochs=EPISODES, LR=1e-2, annealing=False)
 
 action = env.action_space.sample()
 obs, rewards, dones, info, _ = env.step(action)
@@ -32,7 +32,7 @@ episode_max_ratio = []
 ep_mean_rewards = []
 
 obs = T.tensor(obs)
-for episode in range(ITERATIONS):
+for episode in range(EPISODES):
     episode_loss = 0.0
     episode_policy_loss = 0.0
     episode_crit_loss = 0.0
@@ -63,8 +63,6 @@ for episode in range(ITERATIONS):
                 
 
         # Render the env
-        #if episode > 350:
-            #env.render()
 
     print("Episode: ", episode)
     print()
@@ -78,6 +76,29 @@ for episode in range(ITERATIONS):
     episode_seed = np.random.randint(0, 100)
     env.reset(seed=episode_seed)
 
+env.close()
+
+
+# Render games at the end
+env = gym.make("LunarLander-v2", render_mode="human")
+
+env.reset()
+action = env.action_space.sample()
+obs, rewards, dones, info, _ = env.step(action)
+
+obs = T.tensor(obs, dtype=T.float32)
+
+for e in range(TS_PER_ITER):
+    prev_obs = obs.clone().detach()
+    action, log_prob, entropy, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
+    obs, rewards, dones, info, _ = env.step(np.array(action))
+    obs = T.tensor(obs)
+
+    ep_tot_rewards += rewards
+
+    if dones == True:
+        env.reset(seed=episode_seed)
+            
 env.close()
 
 fig, ax = plt.subplots(1, 2, figsize=(10, 6))

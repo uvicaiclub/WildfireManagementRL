@@ -108,7 +108,8 @@ class Agent(nn.Module):
         # food for thought.
     
     def __init__(self, n_actions, c1, c2, input_dims, gamma=0.99, gae_lambda=0.95,
-                 policy_clip=0.2, batch_size=64, buffer_size=64*10, n_epochs=10, LR=1e-3):
+                 policy_clip=0.2, batch_size=64, buffer_size=64*10, n_epochs=10, LR=1e-3,
+                 annealing=True):
         
         super(Agent, self).__init__()
 
@@ -135,6 +136,12 @@ class Agent(nn.Module):
 
         #           --- Misc ---
         self.criterion = nn.MSELoss()
+        self.annealing = annealing
+        if annealing == True:
+            self.anneal_lr_actor = T.optim.lr_scheduler.StepLR(self.optimizer_actor, buffer_size*5, gamma=0.3)
+            self.anneal_lr_critic = T.optim.lr_scheduler.StepLR(self.optimizer_critic, buffer_size*5, gamma=0.3)
+
+        self.training_steps = 0
     
 
     def _create_model(self, input_dims, output_dims):
@@ -188,25 +195,25 @@ class Agent(nn.Module):
         prob_of_action = new_probs.log_prob(act_tens)
 
         # Entropy Loss
-        entropy_loss = T.mean(new_probs.entropy())
+        entropy_loss = T.mean(new_probs.entropy()).to(device)
 
         # Get probability raio
-        prob_ratios = T.exp(prob_of_action - act_logprob_tens)
+        prob_ratios = T.exp(prob_of_action - act_logprob_tens).to(device)
 
-        maximum_ratio = T.max(prob_ratios).detach().numpy()
+        #maximum_ratio = T.max(prob_ratios).detach().numpy()
 
         # Clip Max Tensor
-        clip_max = T.tensor(1+self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)
+        clip_max = T.tensor(1+self.policy_clip, dtype=T.float32).expand(self.batch_size, 1).to(device)
 
         # Clip Min Tensor
-        clip_min =  T.tensor(1-self.policy_clip, dtype=T.float32).expand(self.batch_size, 1)  
+        clip_min =  T.tensor(1-self.policy_clip, dtype=T.float32).expand(self.batch_size, 1).to(device)
 
         #print("clamped Policies: ", T.clamp(prob_ratios, clip_min, clip_max))
         #print("non clamped policies: ", prob_ratios)
 
         # policy loss
-        policy_loss = T.min((prob_ratios*adv_tensor), T.clamp(prob_ratios, clip_min, clip_max)*adv_tensor)
-        policy_loss = T.mean(policy_loss)
+        policy_loss = T.min((prob_ratios*adv_tensor), T.clamp(prob_ratios, clip_min, clip_max)*adv_tensor).to(device)
+        policy_loss = T.mean(policy_loss).to(device)
 
         #           --- Critic Loss ---
 
@@ -235,7 +242,7 @@ class Agent(nn.Module):
 
         # Implementation detail in 'Implementation Matters in Deep Policy Gradients'
         # No entropy loss
-        loss = -policy_loss + self.c1*crit_loss # - self.c2*entropy_loss
+        loss = -policy_loss + self.c1*crit_loss - self.c2*entropy_loss
 
         #print('policy_loss: ', policy_loss)
         #print('crit loss: ', crit_loss)
@@ -247,6 +254,12 @@ class Agent(nn.Module):
 
         self.optimizer_actor.step()
         self.optimizer_critic.step()
+
+        if self.annealing == True:
+            self.anneal_lr_actor.step()
+            self.anneal_lr_critic.step()
+            #print("### Learning Rate : ", self.anneal_lr_actor.get_last_lr() , " ###")
+            #self.training_steps += 1
 
         # Exponential Decay on C2
         self.c2 *= 0.999

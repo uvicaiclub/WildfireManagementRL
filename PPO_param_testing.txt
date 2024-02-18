@@ -41,4 +41,15 @@
 
     Change 3:
         Removed the subtraction of the mean from the reward scaling.
-        Let c2 = 0 as shown in the paper.
+        Let c2 = 0 as shown in the paper. 
+
+    Change 4: 
+        Let c2 have exponential decay once again, starting from 0.1. If that proves better results, the next step will be 
+        to anneal the learning rate as well. 
+        Annealing learning rate looks like it actually made it worse. Changing from Cosine Annealing to Linear Annealing
+        
+        Maybe because we start at a learning rate that's too low?
+        Changing the learning rate from 1e-4 to 1e-2
+
+        Learning rates, cosine, linear and step all seem to worsen performance on lunar lander. Setting annealing to false. 
+        
