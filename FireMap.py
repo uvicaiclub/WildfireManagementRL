@@ -28,6 +28,7 @@ FIRST_JUMP_RATIO = 1.2
 STARTING_FUEL = 100
 FUEL_VARIANCE = 2
 
+
 class FireMap:
     """
     State values:
