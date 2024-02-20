@@ -11,8 +11,8 @@ class FireMapEnv(gym.Env):
 
     def __init__(self):
         super(FireMapEnv, self).__init__()
-        self.action_space = spaces.MultiDiscrete((6,6,6))
         obs_dimensions = dimensions()
+        self.action_space = spaces.MultiDiscrete((30, 30, 30, 30, 30, 30))
         self.observation_space = spaces.Box(low=0, high=1, shape=obs_dimensions, dtype=np.float)
         self.state = None
 
@@ -21,18 +21,14 @@ class FireMapEnv(gym.Env):
         Take step based on current action
 
         Actions:
-        0 - Move north
-        1 - Move south
-        2 - Move east
-        3 - Move west
-        4 - Add moisture to current cell (decrease intensity/chance of fire)
-        5 - Remove fuel from current cell (only on non-active cell)
+        coordinates of all 3 agents
+        [(x1, y1), (x2, y2), (x3, y3)]
         """
         self.state.next(action)
-        obs = self.state.state # N * N * L np.array
-        reward = self.state.get_reward() # Count of active fires * -1
-        done = self.state.get_done() # Done when all fires are extinguished
-        info = self.state.get_info() # None
+        obs = self.state.state
+        reward = self.state.get_reward()
+        done = self.state.get_done()
+        info = self.state.get_info()
         return obs, reward, done, info
 
     def reset(self):
