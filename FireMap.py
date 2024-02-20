@@ -1,6 +1,7 @@
 import numpy as np
 import math
 from scipy.signal import convolve2d
+from kernels import IntensityKernel
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -8,7 +9,7 @@ import IPython.display
 
 MAP_SIZE = 90 # Each unit is 50m x 50m
 START_INTENSITY = 3 / 6
-STARTING_FIRES = 2 
+STARTING_FIRES = 2
 
 # Agent names: Snap, Crackle, and Pop
 # Or Alvin, Simon, and Theodore
@@ -59,6 +60,9 @@ class FireMap:
         wind_x, wind_y = self._init_wind() # Establish unit vector of wind (in any quadrant)
         self.state[:, :, WIND_X] = wind_x
         self.state[:, :, WIND_Y] = wind_y
+        rounded_wind = FireMap._round_to_8_directions(wind_x, wind_y)
+        ik = IntensityKernel()
+        self.kernel = ik.get_kernel(rounded_wind)
 
         self.prev_actions = []
         self.time = 0
@@ -74,13 +78,13 @@ class FireMap:
         intensity = self.state[:, :, INTENSITY]
         fuel = self.state[:, :, FUEL]
         moisture = self.state[:, :, MOISTURE]
-        elevation = self.state[:, :, ELEVATION]
+        # elevation = self.state[:, :, ELEVATION]
 
         self._make_actions(actions)
         self.prev_actions = actions
         
-        intensity_of_neighbours, non_zero_neighbours = self._get_neighbours(intensity)
-        intensity = self._get_new_ignitions(intensity, intensity_of_neighbours, non_zero_neighbours)
+        intensity_of_neighbours, non_zero_neighbours = FireMap._get_neighbours(intensity, self.kernel)
+        intensity = FireMap._get_new_ignitions(intensity, intensity_of_neighbours, non_zero_neighbours, moisture)
         intensity = np.where(fuel > 0, intensity, -1)
 
         self.state[:, :, INTENSITY] = np.clip(intensity, -1, 1)
@@ -117,38 +121,67 @@ class FireMap:
         plt.imshow(self.state[:,:,INTENSITY], cmap=intensity_cm, interpolation='none', vmin=-1, vmax=1)
         plt.colorbar()
         plt.imshow(self.state[:,:,MOISTURE], cmap=moisture_cm, interpolation='none', alpha=MOISTURE_VISIBILITY, vmin=0, vmax=1)
-        plt.title(f"Fire Spread (t={self.time})")
+        plt.gca().invert_yaxis()
+        plt.title(f"w=({self.state[0, 0, WIND_X]:0.1f}, {self.state[0, 0, WIND_Y]:0.1f}) (t={self.time})")
+
+        wind_x = self.state[0, 0, WIND_X]
+        wind_y = self.state[0, 0, WIND_Y]
+        # You can adjust the starting point of the vector. Here, it's set to the center of the plot.
+        origin_x = MAP_SIZE / 2
+        origin_y = MAP_SIZE / 2
+        # Scale the wind vector for visibility if needed, especially if wind_x and wind_y are very small.
+        scale_factor = 3  # Adjust as needed based on your wind speed values
+        plt.quiver(origin_x, origin_y, wind_x, wind_y, scale=scale_factor, color='black', width=0.02, headwidth=3, headlength=4)
+
+
 
         for (x, y) in self.prev_actions:
             plt.scatter(AGENT_AREA*x + 1, AGENT_AREA*y + 1, c='white')
         plt.show()
         
-    def _get_neighbours(self, intensity: np.array) -> tuple[np.array, np.array]:
+    @staticmethod
+    def _get_neighbours(intensity: np.array, kernel: np.array) -> tuple[np.array, np.array]:
         """
         Intensity of neighbours: sum of intensity
         Non-zero neighbours: count of active, burning neighbours
         """
-        sum_kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]])
         binary_intensity = (intensity > 0).astype(int)
 
-        intensity_of_neighbours = convolve2d(intensity, sum_kernel, mode='same', boundary='fill', fillvalue=0)        
-        non_zero_neighbours = convolve2d(binary_intensity, sum_kernel, mode='same', boundary='fill', fillvalue=0)
+        intensity_of_neighbours = convolve2d(intensity, kernel, mode='same', boundary='fill', fillvalue=0)        
+        non_zero_neighbours = convolve2d(binary_intensity, kernel, mode='same', boundary='fill', fillvalue=0)
         
         return intensity_of_neighbours, non_zero_neighbours
 
-    def _get_new_ignitions(self, intensity: np.array, intensity_of_neighbours: np.array, non_zero_neighbours: np.array) -> np.array:
+    @staticmethod
+    def _get_new_ignitions(intensity: np.array, intensity_of_neighbours: np.array, non_zero_neighbours: np.array, moisture: np.array) -> np.array:
         """
         Find empty cells
         Ignite probabilistically based on number of adjacent fires
         """
-        adjusted_intensity_jump = np.where(non_zero_neighbours > 0, intensity_of_neighbours/non_zero_neighbours *FIRST_JUMP_RATIO*(1 - self.state[:,:,MOISTURE] * MOISTURE_INTENSITY_DAMP), 0)
+        adjusted_intensity_jump = np.where(non_zero_neighbours > 0, intensity_of_neighbours/non_zero_neighbours *FIRST_JUMP_RATIO*(1 - moisture * MOISTURE_INTENSITY_DAMP), 0)
         # adjusted_intensity_jump = np.rint(adjusted_intensity_jump * 6) / 3
 
-        ignition_decision = np.random.random((MAP_SIZE, MAP_SIZE)) < non_zero_neighbours / 8.0 * IGNITION_RATE * (1 - self.state[:,:,MOISTURE] * MOISTURE_SPREAD_DAMP)
+        ignition_decision = np.random.random((MAP_SIZE, MAP_SIZE)) < non_zero_neighbours / 8.0 * IGNITION_RATE * (1 - moisture * MOISTURE_SPREAD_DAMP)
         new_ignitions = (intensity == 0) & ignition_decision
         
         return np.where(new_ignitions, adjusted_intensity_jump, intensity)
     
+    @staticmethod
+    def _round_to_8_directions(x, y):
+        angle = np.arctan2(y, x)
+        direction_idx = int(np.ceil(4/np.pi*(angle + 2*np.pi- np.pi/8)))
+        direction_map = [
+            (1, 0),   # East
+            (1, 1),   # Northeast
+            (0, 1),   # North
+            (-1, 1),  # Northwest
+            (-1, 0),  # West
+            (-1, -1), # Southwest
+            (0, -1),  # South
+            (1, -1)   # Southeast
+        ]
+        return direction_map[direction_idx % 8]
+
     def get_done(self) -> bool:
         """
         Game over if no burning cells
