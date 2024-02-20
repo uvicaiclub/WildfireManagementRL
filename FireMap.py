@@ -126,12 +126,15 @@ class FireMap:
 
         wind_x = self.state[0, 0, WIND_X]
         wind_y = self.state[0, 0, WIND_Y]
+
+        rounded_wind_x, rounded_wind_y = FireMap._round_to_8_directions(wind_x, wind_y)
         # You can adjust the starting point of the vector. Here, it's set to the center of the plot.
         origin_x = MAP_SIZE / 2
         origin_y = MAP_SIZE / 2
         # Scale the wind vector for visibility if needed, especially if wind_x and wind_y are very small.
         scale_factor = 3  # Adjust as needed based on your wind speed values
-        plt.quiver(origin_x, origin_y, wind_x, wind_y, scale=scale_factor, color='black', width=0.02, headwidth=3, headlength=4)
+        plt.quiver(origin_x, origin_y, rounded_wind_x, rounded_wind_y, scale=scale_factor, color='black', width=0.02, headwidth=3, headlength=4)
+        # plt.quiver(origin_x, origin_y, wind_x, wind_y, scale=scale_factor, color='black', width=0.02, headwidth=3, headlength=4)
 
 
 
