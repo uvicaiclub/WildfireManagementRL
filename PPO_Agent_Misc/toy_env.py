@@ -15,7 +15,7 @@ observation, info = env.reset(seed=episode_seed)
 
 # HYPERPARAMETERS
 EPOCHS = 25
-NUM_MINIBATCHES = 16
+NUM_MINIBATCHES = 32
 MINIBATCH = 16
 EPISODES = 100
 TS_PER_ITER = 2000
@@ -40,7 +40,7 @@ ep_mean_rewards = []
 
 obs = T.tensor(obs).to(PPO_Agent.device)
 
-for episode in tqdm.tqdm(range(100)):
+for episode in tqdm.tqdm(range(50)):
     episode_loss = 0.0
     episode_policy_loss = 0.0
     episode_crit_loss = 0.0
@@ -48,7 +48,7 @@ for episode in tqdm.tqdm(range(100)):
     ep_tot_rewards = 0.0
     for e in range(TS_PER_ITER):
         prev_obs = obs.clone().detach()
-        action, mean, var, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
+        action, logprob, mean, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
         obs, rewards, dones, info, _ = env.step(np.array(action))
         obs = T.tensor(obs).to(PPO_Agent.device)
 
@@ -57,7 +57,7 @@ for episode in tqdm.tqdm(range(100)):
         next_vf = PPO_Agent.critic.forward(obs)
         next_vf = next_vf.detach()
         advantage = PPO_Agent.get_gae(rewards, prev_vf, next_vf)
-        PPO_Agent.memory.store_memory(prev_obs, action, mean, var, advantage, prev_vf, rewards, dones)
+        PPO_Agent.memory.store_memory(prev_obs, action, logprob, advantage, prev_vf, rewards, dones)
         #print(action)
 
         if dones == True:
@@ -71,6 +71,7 @@ for episode in tqdm.tqdm(range(100)):
                 episode_policy_loss += np.array(e_policy_loss)
 
             PPO_Agent.c2 *= 0.95
+            PPO_Agent.actor.var *= 0.95
                 
 
         # Render the env
@@ -101,7 +102,7 @@ obs = T.tensor(obs, dtype=T.float32)
 
 for e in range(TS_PER_ITER):
     prev_obs = obs.clone().detach()
-    action, mean, var, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
+    action, logprob, mean, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
     #print(action)
     obs, rewards, dones, info, _ = env.step(np.array(action))
     obs = T.tensor(obs).to(PPO_Agent.device)
