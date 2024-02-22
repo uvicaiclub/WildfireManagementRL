@@ -1,0 +1,59 @@
+1'st main test:
+    One of the main things I'm seeing is that we want to add a parameter buffer_size, meant to be a multiple of batch_size and 
+    meant to serve as a training buffer. In essense, we add a buffer size corresponding to a sufficient number of steps such
+    that we have n number of batches to train on all at once. Right now, buffer_size = 10*batch_size.
+
+    Another crutial detail is that the way we calculate entropy doesn't decrease wrt time. This is a massive problem
+    as we would expect the agent would pick more suitable moves as the agent learns. To counteract this, we're going to 
+    introduce exponential decay on the value c2. 
+
+    Implemented:
+    # Exponential Decay on C2
+        self.c2 *= 0.98
+
+    Current Hyperparameters are: 
+    EPOCHS = 10
+
+    PPO_Agent = PPO(n_actions=4, c1=1.0, c2=0.01, input_dims=8, gamma=0.99, alpha=0.0003, gae_lambda=0.95,
+                    policy_clip=0.2, batch_size=64, buffer_size=64*5, n_epochs=10, LR=1e-4)
+
+
+2'nd main test:
+    In an attempt to prevent memorization/overfitting, I'm changing the random seed every episode. 
+    I changed exponential decay to the one above after noting a large flaw in the last exponential decay function.
+    I also am normalizing advantages, 
+
+3'rd main test:
+    First main change, .to(device) everything to optimize for performance. 
+    Following Implementation Matters in PPO, one of the things they suggest is having 32 minibatches, 2000 timesteps per iteration, 
+    where then these models are then trained for ~400 iterations. Before I make any further changes, I want to see where we're at in terms
+    of loss and whatnaught before I add any future changes. The first graph represents the control.
+
+    Change 1: 
+        Added a clip function to the value function loss as seen in the paper 'Implementation Matters in Deep Policy Gradients:
+        A Case Study on PPO and TRPO'
+        The second graph is the loss curve associated with that. 
+        Also changed includes a graph dictating mean reward of that episode.
+
+    Change 2: 
+        Added TanH layers to the neural network instead of relu layers. 
+        Seemed to introduce faster improvement.
+
+    Change 3:
+        Removed the subtraction of the mean from the reward scaling.
+        Let c2 = 0 as shown in the paper. 
+
+    Change 4: 
+        Let c2 have exponential decay once again, starting from 0.1. If that proves better results, the next step will be 
+        to anneal the learning rate as well. 
+        Annealing learning rate looks like it actually made it worse. Changing from Cosine Annealing to Linear Annealing
+        
+        Maybe because we start at a learning rate that's too low?
+        Changing the learning rate from 1e-4 to 1e-2
+
+        Learning rates, cosine, linear and step all seem to worsen performance on lunar lander. Setting annealing to false. 
+
+4'th main test:
+    Fixed the learning from 64*5 to 32 (buffer size) updates of 16 (minibatch size), which caused exploding ratios.
+    Normalizing rewards relative to the entire buffer_size as well, rather than just the minibatches themselves.
+        
