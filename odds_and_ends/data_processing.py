@@ -30,16 +30,17 @@ def process_RL_outputs(raw_actions) -> list[tuple]:
   _n_agents = len(raw_actions)//2
 
   # rescale to environment resolution
-  raw_actions *= 3
+  #raw_actions *= 3
+
 
   # clip to min and max (0 and 30)
-  raw_actions = np.clip(raw_actions,a_min=0,a_max=90)
+  raw_actions = np.clip(raw_actions,a_min=0,a_max=89)
+  raw_actions = raw_actions.astype(int)
 
   # combine actions into 
   # (all x positions, then all y positions)
+
   return list(zip(raw_actions[:_n_agents]//1, raw_actions[_n_agents:]//1))
-
-
 
 
 # example usage
