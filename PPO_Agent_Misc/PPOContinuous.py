@@ -1,45 +1,3 @@
-'''
-Actor Critic Methods will often have performance tanks after a certain amount
-of time due to being sensitive to perturbations. 
-This was the inspiration behind the PPO algorithm. Effectively the process
-of making the TRPO algorithm more efficient and less prone to mass fluctuations.
-
-It does this by using what the paper calls 'clipped probability ratios'
-which is effectively comparing policies between timesteps to eachother 
-with a set lower bound. Basing the update of the policy between some 
-ratio of a new policy to the old. The term probability comes due to having
-0-1 as bounds.
-
-PPO also keeps 'memories' maybe similar to that of DQN. Multiple updates 
-to the network happen per data sample, which are carried out through
-minibatch stochastic gradient ascent. 
-
-Implementation notes: Memory
-We note that learning in this case is carried out through batches. 
-We keep a track of, say, 50 state transitions, then train on a batch 
-of 5-10-15 of them. The size of the batch is arbitrary for implementation 
-but there likely exists a best batch size. It seems to be the case that 
-the batches are carried out from iterative state transfers only. 
-
-Implementation notes: Critic
-Two distinct networks instead of shared inputs. 
-Actor decides to do based on the current state, and the critic evaluates states.
-
-Critic Loss:
-Return = advantage + critic value (from memory).
-then the L_critic = MSE(return - critic vlaue (from network))
-
-Networks outputs probabilities for an action distribution, therefore exploration is
-handled by definition. 
-
-Overview:
-Class for replay buffer, which can be implemented quite well with lists. 
-Class for actor network and critic network
-Class for the agent, tying everything together
-Main loop to train and evaluate
-
-'''
-
 import os 
 import numpy as np
 import torch as T
@@ -65,12 +23,12 @@ class PPOMemory:
         self.batch_size = batch_size
 
     def store_memory(self, state, action, probs, adv, vals, reward, done):
-        self.states.append(state)
-        self.actions.append(action)
-        self.logprobs.append(probs)
-        self.adv.append(adv)
-        self.vals.append(vals)
-        self.rewards.append(reward)
+        self.states.append(state.detach())
+        self.actions.append(action.detach())
+        self.logprobs.append(probs.detach())
+        self.adv.append(adv.detach())
+        self.vals.append(vals.detach())
+        self.rewards.append(reward.detach())
         self.dones.append(done)
 
     def clear_memory(self):
@@ -85,7 +43,7 @@ class PPOMemory:
     def get_memory_batch(self):
         ''' Returns a memory batch of size batch_size. '''
 
-        # retrieves the 64 states
+        # retrieves batch_size memories
         states_T = T.stack(self.states[:self.batch_size]).to(device)
         act_logprob_tens = T.stack(self.logprobs[:self.batch_size]).to(device)
         adv_tensor = T.tensor(self.adv[:self.batch_size]).to(device)
@@ -94,7 +52,7 @@ class PPOMemory:
         rew_tens = T.stack(self.rewards[:self.batch_size]).to(device)
         done_tens = T.tensor(self.dones[:self.batch_size]).to(device)
 
-        # removes the first self.batch_size states
+        # removes the first self.batch_size memories.
         del self.states[:self.batch_size]
         del self.logprobs[:self.batch_size]
         del self.adv[:self.batch_size]
@@ -130,7 +88,7 @@ class ActorModel(nn.Module):
         self.mean = nn.Linear(in_features=64, out_features=n_actions).to(device)
 
         # Constant variance
-        self.var = T.diag(T.ones(n_actions)).to(device)*20
+        self.var = T.diag(T.ones(n_actions)).to(device)*0.5
 
         # misc
         self.min_tens = min_tens
@@ -140,20 +98,23 @@ class ActorModel(nn.Module):
         ''' We create a class that computes the distribution of our actions. '''
 
         # base computation
-        x = F.relu(self.fc1(x)).to(device)
-        x = F.relu(self.fc2(x)).to(device)
+        x = F.tanh(self.fc1(x)).to(device)
+        x = F.tanh(self.fc2(x)).to(device)
 
-        # split
         # we note the mean value goes through a tanh as it corresponds with the 
         # lunar lander task at hand. Specifically, we have a output which ranges from (-1,1)
-        mean = F.relu(self.mean(x)).to(device)
+
+        # for our environment, depending on how we represent the raw actions, 
+        # we can have positive and negative values, if we center in the middle of the board
+        # for example.
+        mean = self.mean(x).to(device)
 
         return mean
     
     def get_action_logprob(self, x):
         mean = self.forward(x)
 
-        calc_mean = mean.detach().to(device)
+        calc_mean = mean.to(device)
 
         # get action from distribution distribution
         dist = T.distributions.MultivariateNormal(calc_mean, self.var)
@@ -161,16 +122,11 @@ class ActorModel(nn.Module):
         action = dist.sample()
         logprob = dist.log_prob(action)
 
-        #if action[0] < 0:
-        #    action[0] = 0
-
-        #logprob = self.calc_logprob(calc_mean, self.var, action)
-
         return action.to(device), logprob, mean.to(device)
     
     def calc_action_logprob_entropy(self, x, action):
         mean = self.forward(x)
-        calc_mean = mean.detach().to(device)
+        calc_mean = mean.to(device)
 
         dist = T.distributions.MultivariateNormal(calc_mean, self.var)
 
@@ -179,9 +135,6 @@ class ActorModel(nn.Module):
         return logprob
     
 class CriticModel(nn.Module):
-    '''
-
-    '''
     def __init__(self, input_shape):
         super(CriticModel, self).__init__()
 
@@ -199,8 +152,6 @@ class CriticModel(nn.Module):
 
         return x
 
-
-
 class Agent(nn.Module):
         # An interesting note - implementations exist where actor and critic share 
         # the same NN, differentiated by a singular layer at the end. 
@@ -214,7 +165,7 @@ class Agent(nn.Module):
 
         #           --- Hyperparams ---
         self.gamma = gamma
-        self.policy_clip = policy_clip
+        self.policy_clip = T.tensor(policy_clip, dtype=T.float32)
         self.gae_lambda = gae_lambda
         self.c1 = c1
         self.c2 = c2
@@ -258,94 +209,164 @@ class Agent(nn.Module):
     def get_action_and_vf(self, x):
         ''' get action and associated vf '''
         action, logprob, mean = self.actor.get_action_logprob(x)
-        #print(f'{action = }')
 
         return action, logprob, mean, self.critic.forward(x).to(device)
+    
+    def discount_path(self, path, h):
+        """
+        Given a "path" of items x_1, x_2, ... x_n, return the discounted
+        path, i.e. 
+        X_1 = x_1 + h*x_2 + h^2 x_3 + h^3 x_4
+        X_2 = x_2 + h*x_3 + h^2 x_4 + h^3 x_5
+        etc.
+        Can do (more efficiently?) w SciPy. Python here for readability
+        Inputs:
+        - path, list/tensor of floats
+        - h, discount rate
+        Outputs:
+        - Discounted path, as above
+        """
+        curr = 0
+        rets = []
+        for i in range(len(path)):
+            curr = curr*h + path[-1-i]
+            rets.append(curr)
+        rets =  T.stack(list(reversed(rets)), 0)
+        return rets
+    
+    def advantage_and_return(self, rewards, values, not_dones):
+        """
+        Calculate GAE advantage, discounted returns, and 
+        true reward (average reward per trajectory)
 
-    def learn(self, rew_mean, rew_std):
-        # Forget gradients from last learning step
-        self.optimizer_actor.zero_grad()
-        self.optimizer_critic.zero_grad()
+        GAE: delta_t^V = r_t + discount * V(s_{t+1}) - V(s_t)
 
-        # retrieve memories from last batch
-        state_tens, logprob_tens, adv_tensor, vals_tens, act_tens, rew_tens, done_tens = self.memory.get_memory_batch()
-
-        #           --- Actor and Entropy Loss ---
-
-        # get logprob of action and entropy
-        new_logprobs = self.actor.calc_action_logprob_entropy(state_tens, act_tens)        
-
-        # Get probability raio
-        prob_ratios = T.exp(new_logprobs - logprob_tens).to(device)
-
-        #maximum_ratio = T.max(prob_ratios).detach().numpy()
-
-        # Clip Max Tensor
-        clip_max = T.tensor(1+self.policy_clip, dtype=T.float32).expand(self.batch_size).to(device)
-
-        # Clip Min Tensor
-        clip_min =  T.tensor(1-self.policy_clip, dtype=T.float32).expand(self.batch_size).to(device)
+        using formula from John Schulman's code:
+        V(s_t+1) = {0 if s_t is terminal
+                   {v_s_{t+1} if s_t not terminal and t != T (last step)
+                   {v_s if s_t not terminal and t == T
+        """
         
-        # policy loss
-        clipped_ratios = T.clamp(prob_ratios, clip_min, clip_max).to(device)
-        policy_loss = T.min(prob_ratios, clipped_ratios).to(device)
-        policy_loss = policy_loss*adv_tensor
-        
-        policy_loss = T.mean(policy_loss).to(device)
+        V_s_tp1 = T.cat([values[:,1:], values[:, -1:]], 1) * not_dones
+        deltas = rewards + self.gamma * V_s_tp1 - values
 
-        #           --- Critic Loss ---
+        # now we need to discount each path by gamma * lam
+        advantages = T.zeros_like(rewards)
+        returns = T.zeros_like(rewards)
+        indices = self.get_path_indices(not_dones)
+        for agent, start, end in indices:
+            advantages[agent, start:end] = self.discount_path( \
+                    deltas[agent, start:end], self.gae_lambda*self.gamma)
+            returns[agent, start:end] = self.discount_path( \
+                    rewards[agent, start:end], self.gamma)
 
-        # sum over the rewards to get returns
-        #bootstrap = self.critic(new_state.to(device)).detach()
+        return advantages.clone().detach(), returns.clone().detach()
+
+    def learn(self):
+        '''
+        This function iterates over our entire buffer size and trains over minibatches.
+        '''
+
+        # We set the variables nessessary to scale our rewards and advantages 
+        rew_mean = T.tensor(self.memory.rewards).mean()
+        rew_std = T.tensor(self.memory.rewards).std()
+
+        adv_mean = T.tensor(self.memory.adv).mean()
+        adv_std = T.tensor(self.memory.adv).std()
+
+        #self.memory.rewards = (self.memory.rewards - rew_mean) / rew_std
+        total_pol_loss = 0.0
+        total_critic_loss = 0.0
+        total_loss = 0.0
         
-        # Monte Carlo estimate of returns
-        rewards = []
-        discounted_reward = 0
-        for reward, is_terminal in zip(reversed(rew_tens), reversed(done_tens)):
-            if is_terminal:
-                discounted_reward = 0
-            discounted_reward = reward + (self.gamma * discounted_reward)
-            rewards.insert(0, discounted_reward)
+        for minibatch in range(self.buffer_size//self.batch_size):
+
+            # retrieve memories from last batch
+            state_tens, logprob_tens, adv_tensor, vals_tens, act_tens, rew_tens, done_tens = self.memory.get_memory_batch()
+
+
+            #           --- Actor and Entropy Loss ---
+
+
+            # get logprob of action and entropy
+            new_logprobs = self.actor.calc_action_logprob_entropy(state_tens, act_tens)      
+
+            # Get probability raio
+            prob_ratios = T.exp(new_logprobs - logprob_tens).to(device)
+
+            # policy loss
+
+            clipped_ratios = T.clamp(prob_ratios, 1-self.policy_clip, 1+self.policy_clip).to(device)
+            policy_loss = T.min(prob_ratios, clipped_ratios).to(device)
+
+
+            #           --- Critic Loss ---
+
+
+            approx_val = T.flatten(self.critic.forward(state_tens)).to(device)
+            #approx_val_clip = T.clamp(approx_val, self.prev_val_loss-self.policy_clip, self.prev_val_loss+self.policy_clip).to(device)
+
             
-        # Normalizing the rewards
-        rewards = T.tensor(rewards, dtype=T.float32).to(device)
-        rewards = (rewards - rew_mean) / (rew_std + 1e-7)
+            #           --- Advantage and Returns  ---
 
-        approx_val = T.flatten(self.critic.forward(state_tens)).to(device)
+
+            # Monte Carlo estimate of returns
+            rewards = []
+            discounted_reward = 0
+            for reward, is_terminal in zip(reversed(rew_tens), reversed(done_tens)):
+                if is_terminal:
+                    discounted_reward = 0
+                discounted_reward = reward + (self.gamma * discounted_reward)
+                rewards.insert(0, discounted_reward)
+                
+            # Normalizing the rewards
+            rewards = T.tensor(rewards, dtype=T.float32).to(device)
+            rewards = (rewards - rew_mean) / (rew_std + 1e-7)
+
+            # Normalize advantages
+            adv_tensor = (adv_tensor - adv_mean) / (adv_std + 1e-10)
+
+
+            #           --- Total Loss ---
+
         
-        crit_loss = self.criterion(approx_val, rewards)
+            # Apply Advantages to Policy Loss
+            policy_loss = adv_tensor*policy_loss
+            policy_loss = T.mean(policy_loss).to(device)
 
-        # Implementation detail in 'Implementation Matters in Deep Policy Gradients'
-        #crit_loss_clip = T.clamp(crit_loss, self.prev_val_loss-self.policy_clip, self.prev_val_loss+self.policy_clip).to(device)
-        #crit_loss = T.min(crit_loss, 10000000000).to(device)
-        crit_loss = crit_loss.float().to(device)
+            # Apply returns 
 
-        #self.prev_val_loss = np.array(crit_loss)
-        #           --- Total Loss ---
+            crit_loss = self.criterion(approx_val, rewards)
+            #crit_loss_clipped = self.criterion(approx_val_clip, rewards)
+                        
+            #crit_loss = T.max(crit_loss, crit_loss_clipped).to(device)
+            crit_loss = self.c1*crit_loss.float().to(device)
 
-        # Implementation detail in 'Implementation Matters in Deep Policy Gradients'
-        # No entropy loss
-        loss = -policy_loss + self.c1*crit_loss # - self.c2*entropy_loss
-
-        #print('policy_loss: ', policy_loss)
-        #print('crit loss: ', crit_loss)
-        #print('entropy loss: ', entropy_loss)
-        #print(loss)
-
-        # backward pass
-        loss.backward()
-
-        self.optimizer_actor.step()
-        self.optimizer_critic.step()
-
-        if self.annealing == True:
-            self.anneal_lr_actor.step()
-            self.anneal_lr_critic.step()
-            #print("### Learning Rate : ", self.anneal_lr_actor.get_last_lr() , " ###")
-            #self.training_steps += 1
+            loss = -policy_loss + crit_loss # - self.c2*entropy_loss
 
 
-        return policy_loss.detach(), crit_loss.detach(), loss.detach()
+            #           --- Backpropogate ---
+
+
+            self.optimizer_actor.zero_grad()
+            self.optimizer_critic.zero_grad()
+
+            loss.backward()
+
+            self.optimizer_actor.step()
+            self.optimizer_critic.step()
+
+            if self.annealing == True:
+                self.anneal_lr_actor.step()
+                self.anneal_lr_critic.step()
+
+            # Add to total loss
+            total_pol_loss += policy_loss.detach().numpy()
+            total_critic_loss += crit_loss.detach().numpy()
+            total_loss += loss.detach().numpy()
+
+
+        return total_pol_loss, total_critic_loss, total_loss
 
         
 

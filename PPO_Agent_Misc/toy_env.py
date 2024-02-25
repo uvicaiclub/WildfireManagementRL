@@ -25,7 +25,7 @@ action_min = T.tensor((0.0, -1.0))
 action_max = T.tensor((1.0, 1.0))
 
 
-PPO_Agent = ContPPO(n_actions=2, c1=1.0, c2=0.5, input_dims=8, action_min=action_min, action_max=action_max, 
+PPO_Agent = ContPPO(n_actions=2, c1=0.5, c2=0.1, input_dims=8, action_min=action_min, action_max=action_max, 
                     gamma=0.99, gae_lambda=0.95, policy_clip=0.2, batch_size=MINIBATCH, 
                     buffer_size=MINIBATCH*NUM_MINIBATCHES, n_epochs=EPISODES, LR=1e-3, annealing=False)
 
@@ -49,33 +49,28 @@ for episode in tqdm.tqdm(range(50)):
     for e in range(TS_PER_ITER):
         prev_obs = obs.clone().detach()
         action, logprob, mean, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
-        obs, rewards, dones, info, _ = env.step(np.array(action))
+        obs, rewards, dones, info, _ = env.step(action.numpy())
+
         obs = T.tensor(obs).to(PPO_Agent.device)
 
-        ep_tot_rewards += rewards
-
         next_vf = PPO_Agent.critic.forward(obs)
-        next_vf = next_vf.detach()
         advantage = PPO_Agent.get_gae(rewards, prev_vf, next_vf)
-        PPO_Agent.memory.store_memory(prev_obs, action, logprob, advantage, prev_vf, rewards, dones)
+        PPO_Agent.memory.store_memory(prev_obs, action, logprob, advantage, prev_vf, T.tensor(rewards).to(PPO_Agent.device), dones)
         #print(action)
 
         if dones == True:
             env.reset(seed=episode_seed)
 
         if len(PPO_Agent.memory.states) >= NUM_MINIBATCHES*MINIBATCH:
-            for _ in range(NUM_MINIBATCHES):
-                rewards = T.tensor(PPO_Agent.memory.rewards)
-                rew_mean = rewards.mean()
-                rew_std = rewards.std()
-                e_policy_loss, e_crit_loss, loss = PPO_Agent.learn(rew_mean, rew_std)
-                episode_loss += np.array(loss)
-                episode_crit_loss += np.array(e_crit_loss)
-                episode_policy_loss += np.array(e_policy_loss)
+            e_policy_loss, e_crit_loss, loss = PPO_Agent.learn()
+            episode_loss += np.array(loss)
+            episode_crit_loss += np.array(e_crit_loss)
+            episode_policy_loss += np.array(e_policy_loss)
 
             PPO_Agent.c2 *= 0.95
-            PPO_Agent.actor.var *= 0.95
+            PPO_Agent.actor.var *= 0.999
                 
+        ep_tot_rewards += rewards
 
         # Render the env
 
