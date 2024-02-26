@@ -14,28 +14,32 @@ STARTING_FIRES = 2
 # Or Alvin, Simon, and Theodore
 INTENSITY, FUEL, MOISTURE, ELEVATION, SELF_EXTINGUISH, WIND_X, WIND_Y, HUMIDITY, NUM_LAYERS = 0, 1, 2, 3, 4, 5, 6, 7, 8
 
-IGNITION_RATE = 0.05 # Increase the time required for the fire to spread
-TEMP_CHANGE_RATE = 0.3
-FIRST_JUMP_RATIO = 1.1
+IGNITION_RATE = 0.1 # Increase the time required for the fire to spread
+FUEL_CONSUMPTION_RATE = 0.1
+TEMP_CHANGE_RATE = 0.5
+FIRST_JUMP_RATIO = 1.5
 
 AGENT_AREA = 3
 ADD_CENTER_MOISTURE = 0.4
 ADD_SURROUNDING_MOISTURE = 0.2
 
-FUEL_VARIANCE = 2
+FUEL_VARIANCE = 4
 MOISTURE_VARIANCE = 2
-FUEL_CONSUMPTION_RATE = 0.02
 
 MOISTURE_VISIBILITY = 0.3
 MOISTURE_INTENSITY_DAMP = 0.5
 MOISTURE_SPREAD_DAMP = 0.9
+MOISTURE_DECAY_RATE = 5e-3
+HUMIDITY_SCALAR = 0.1
+MOISTURE_INTENSITY_SCALAR = 5e-2
+MOISTURE_KERNEL_SCALAR = 0.1
+MOISTURE_DRY_RATE = 1e-2
 
 # For normalization
 MAX_INTENSITY = 6 # Corresponding to 6 ranks of fire
-MIN_FUEL = 0.25
+MIN_FUEL = 0
 MIN_MOISTURE = 0.2
 MIN_ELEVATION = 0
-MIN_HUMIDITY = 0.25
 
 KERNEL_SIZE = 7
 KERNEL_INTENSITY = 0.7
@@ -69,7 +73,7 @@ class FireMap:
         self.state[:, :, MOISTURE] = (1 - MIN_MOISTURE) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_MOISTURE
         # self.state[:, :, SELF_EXTINGUISH] = ...
         self.state[:, :, ELEVATION] = (1 - MIN_ELEVATION) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_ELEVATION
-        self.state[:, :, HUMIDITY] = (1 - MIN_HUMIDITY) * np.random.random() + MIN_HUMIDITY
+        self.state[:, :, HUMIDITY] = np.random.random()
 
         # Establish wind unit vector and fixed wind kernel
         wind_x, wind_y = self._init_wind()
@@ -96,7 +100,9 @@ class FireMap:
         self.prev_actions = actions
         moisture = self.state[:, :, MOISTURE]
         
-        intensity = FireMap._get_new_intensity(intensity, moisture, self.kernel)
+        intensity_of_neighbours, non_zero_neighbours = FireMap._get_neighbours(intensity, self.kernel)
+        intensity = FireMap._get_new_intensity(intensity, moisture, intensity_of_neighbours, non_zero_neighbours)
+        self.state[:, :, MOISTURE] = moisture + (self.state[:,:,HUMIDITY] - moisture) * MOISTURE_DECAY_RATE * np.random.random((MAP_SIZE, MAP_SIZE)) - np.clip(intensity + intensity_of_neighbours,0,1) * MOISTURE_DRY_RATE
 
         conditions = [
             fuel <= 0,
@@ -152,7 +158,7 @@ class FireMap:
         plt.colorbar()
         plt.imshow(self.state[:,:,MOISTURE], cmap=moisture_cm, interpolation='none', alpha=MOISTURE_VISIBILITY, vmin=0, vmax=1)
         plt.gca().invert_yaxis()
-        plt.title(f"w=({self.state[0, 0, WIND_X]:0.1f}, {self.state[0, 0, WIND_Y]:0.1f}) (t={self.time})")
+        plt.title(f"(hum={self.state[0,0,HUMIDITY]:0.1f}) (t={self.time})")
 
         wind_x = self.state[0, 0, WIND_X]
         wind_y = self.state[0, 0, WIND_Y]
@@ -164,15 +170,14 @@ class FireMap:
         plt.show()
 
     @staticmethod
-    def _get_new_intensity(intensity: np.array, moisture: np.array, kernel: np.array) -> np.array:
-        def _get_neighbours(intensity: np.array, kernel: np.array) -> tuple[np.array, np.array]:
-            binary_intensity = (intensity > 0).astype(int)
-            intensity_of_neighbours = scipy.signal.convolve2d(intensity, kernel, mode='same', boundary='fill', fillvalue=0)        
-            non_zero_neighbours = scipy.signal.convolve2d(binary_intensity, kernel, mode='same', boundary='fill', fillvalue=0)
-            return intensity_of_neighbours, non_zero_neighbours
+    def _get_neighbours(intensity: np.array, kernel: np.array) -> tuple[np.array, np.array]:
+        binary_intensity = (intensity > 0).astype(int)
+        intensity_of_neighbours = scipy.signal.convolve2d(intensity, kernel, mode='same', boundary='fill', fillvalue=0)        
+        non_zero_neighbours = scipy.signal.convolve2d(binary_intensity, kernel, mode='same', boundary='fill', fillvalue=0)
+        return intensity_of_neighbours, non_zero_neighbours
 
-        intensity_of_neighbours, non_zero_neighbours = _get_neighbours(intensity, kernel)
-
+    @staticmethod
+    def _get_new_intensity(intensity: np.array, moisture: np.array, intensity_of_neighbours: np.array, non_zero_neighbours: np.array) -> np.array:
         coin_flips = np.random.random((MAP_SIZE, MAP_SIZE))
         old_increase = (intensity > 0) & (coin_flips < TEMP_CHANGE_RATE * (1 + intensity_of_neighbours) * (1 - moisture * MOISTURE_SPREAD_DAMP) / intensity)
         old_decrease = (intensity > 0) & (coin_flips < TEMP_CHANGE_RATE / (1 + intensity_of_neighbours) / (1 - moisture * MOISTURE_SPREAD_DAMP) * intensity)
@@ -263,17 +268,6 @@ class FireMap:
 
 def make_board(size: int = MAP_SIZE, start_intensity: int = START_INTENSITY, num_points: int = STARTING_FIRES):
     board = np.zeros((size, size))
-    
-    # # Randomly determine the center and size of the extinguished block
-    # x, y, width, height = np.random.randint([size // 4, size // 4, size // 4, size // 4],
-    #                                         [3*size // 4, 3*size // 4, size // 2, size // 2])
-    
-    # # Calculate the bounds of the extinguished block, ensuring they are within the board limits
-    # start_x, end_x = np.clip([x - width // 2, x + (width + 1) // 2], 0, size)
-    # start_y, end_y = np.clip([y - height // 2, y + (height + 1) // 2], 0, size)
-    
-    # # Set the extinguished block
-    # board[start_y:end_y, start_x:end_x] = -10
 
     # Set starting fires without looping, ensuring unique locations
     zero_indices = np.column_stack(np.where(board == 0))
