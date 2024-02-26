@@ -1,7 +1,6 @@
 import numpy as np
+import scipy
 import math
-from scipy.signal import convolve2d
-from kernels import IntensityKernel
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -15,8 +14,8 @@ STARTING_FIRES = 2
 # Or Alvin, Simon, and Theodore
 INTENSITY, FUEL, MOISTURE, ELEVATION, SELF_EXTINGUISH, WIND_X, WIND_Y, HUMIDITY, NUM_LAYERS = 0, 1, 2, 3, 4, 5, 6, 7, 8
 
-IGNITION_RATE = 1 # Increase the time required for the fire to spread
-FIRST_JUMP_RATIO = 1.2 
+IGNITION_RATE = 0.4 # Increase the time required for the fire to spread
+FIRST_JUMP_RATIO = 1.1
 
 AGENT_AREA = 3
 ADD_CENTER_MOISTURE = 0.4
@@ -24,7 +23,7 @@ ADD_SURROUNDING_MOISTURE = 0.2
 
 FUEL_VARIANCE = 2
 MOISTURE_VARIANCE = 2
-FUEL_CONSUMPTION_RATE = 0.05
+FUEL_CONSUMPTION_RATE = 0.02
 
 MOISTURE_VISIBILITY = 0.3
 MOISTURE_INTENSITY_DAMP = 0
@@ -37,6 +36,12 @@ MIN_MOISTURE = 0.2
 MIN_ELEVATION = 0
 MIN_HUMIDITY = 0.25
 
+KERNEL_SIZE = 7
+KERNEL_INTENSITY = 0.7
+KERNEL_INTENSITY_WEIGHT = 0.5
+KERNEL_BASIC_AXIS = 0.2
+KERNEL_MINOR_SLOPE = 0.1
+KERNEL_MAJOR_SLOPE = 0.3
 
 class FireMap:
     """
@@ -60,18 +65,16 @@ class FireMap:
         wind_x, wind_y = self._init_wind() # Establish unit vector of wind (in any quadrant)
         self.state[:, :, WIND_X] = wind_x
         self.state[:, :, WIND_Y] = wind_y
-        rounded_wind = FireMap._round_to_8_directions(wind_x, wind_y)
-        ik = IntensityKernel()
-        self.kernel = ik.get_kernel(rounded_wind)
+        self.kernel = FireMap._generate_kernel(wind_x, wind_y)
 
         self.prev_actions = []
         self.time = 0
         self.game_over = False
 
     def _init_wind(self) -> tuple[float, float]:
-        wind_direction = np.random.random() * math.pi/2
-        wind_x = math.cos(wind_direction) * (-1 if np.random.random() > 0.5 else 1)
-        wind_y = math.sin(wind_direction) * (-1 if np.random.random() > 0.5 else 1)
+        wind_direction = np.random.random() * 2 * np.pi
+        wind_x = np.cos(wind_direction)
+        wind_y = np.sin(wind_direction)
         return wind_x, wind_y
 
     def next(self, actions: list[tuple[float, float]]) -> None:
@@ -127,14 +130,9 @@ class FireMap:
         wind_x = self.state[0, 0, WIND_X]
         wind_y = self.state[0, 0, WIND_Y]
 
-        rounded_wind_x, rounded_wind_y = FireMap._round_to_8_directions(wind_x, wind_y)
-        # You can adjust the starting point of the vector. Here, it's set to the center of the plot.
-        origin_x = MAP_SIZE / 2
-        origin_y = MAP_SIZE / 2
-        # Scale the wind vector for visibility if needed, especially if wind_x and wind_y are very small.
-        scale_factor = 3  # Adjust as needed based on your wind speed values
-        plt.quiver(origin_x, origin_y, rounded_wind_x, rounded_wind_y, scale=scale_factor, color='black', width=0.02, headwidth=3, headlength=4)
-        # plt.quiver(origin_x, origin_y, wind_x, wind_y, scale=scale_factor, color='black', width=0.02, headwidth=3, headlength=4)
+        # plt.imshow(self.kernel)
+
+        plt.quiver(MAP_SIZE / 2, MAP_SIZE / 2, wind_x, wind_y, scale=3, color='black', width=0.02, headwidth=3, headlength=4)
 
 
 
@@ -150,8 +148,8 @@ class FireMap:
         """
         binary_intensity = (intensity > 0).astype(int)
 
-        intensity_of_neighbours = convolve2d(intensity, kernel, mode='same', boundary='fill', fillvalue=0)        
-        non_zero_neighbours = convolve2d(binary_intensity, kernel, mode='same', boundary='fill', fillvalue=0)
+        intensity_of_neighbours = scipy.signal.convolve2d(intensity, kernel, mode='same', boundary='fill', fillvalue=0)        
+        non_zero_neighbours = scipy.signal.convolve2d(binary_intensity, kernel, mode='same', boundary='fill', fillvalue=0)
         
         return intensity_of_neighbours, non_zero_neighbours
 
@@ -168,22 +166,6 @@ class FireMap:
         new_ignitions = (intensity == 0) & ignition_decision
         
         return np.where(new_ignitions, adjusted_intensity_jump, intensity)
-    
-    @staticmethod
-    def _round_to_8_directions(x, y):
-        angle = np.arctan2(y, x)
-        direction_idx = int(np.ceil(4/np.pi*(angle + 2*np.pi- np.pi/8)))
-        direction_map = [
-            (1, 0),   # East
-            (1, 1),   # Northeast
-            (0, 1),   # North
-            (-1, 1),  # Northwest
-            (-1, 0),  # West
-            (-1, -1), # Southwest
-            (0, -1),  # South
-            (1, -1)   # Southeast
-        ]
-        return direction_map[direction_idx % 8]
 
     def get_done(self) -> bool:
         """
@@ -201,6 +183,62 @@ class FireMap:
     
     def get_info(self) -> dict:
         return {}
+
+    @staticmethod
+    def _generate_kernel(windx: float, windy: float, wind_speed: float = 1, intensity: float = KERNEL_INTENSITY) -> np.array:
+        wind_angle = np.rad2deg(np.arctan2(windy, windx))
+        _intensity_bonus = intensity * KERNEL_INTENSITY_WEIGHT
+        major_axis = KERNEL_BASIC_AXIS + KERNEL_MAJOR_SLOPE * wind_speed + _intensity_bonus
+        minor_axis = KERNEL_BASIC_AXIS + KERNEL_MINOR_SLOPE * wind_speed + _intensity_bonus
+
+        return FireMap._new_kernel(major_axis, minor_axis, angle_deg = wind_angle) * intensity
+    
+    @staticmethod
+    def _create_rotated_distribution(mean, cov_matrix, rot_matrix):    
+        # Rotate the covariance matrix
+        rotated_cov_matrix = np.dot(rot_matrix,
+                                    np.dot(cov_matrix, rot_matrix.T))
+        
+        # Create a multivariate normal distribution with the rotated covariance matrix
+        rotated_distribution = scipy.stats.multivariate_normal(mean=mean,
+                                                            cov=rotated_cov_matrix)
+        
+        return rotated_distribution
+
+    @staticmethod
+    def _new_kernel(major_axis: float, minor_axis: float, center: tuple[float, float] = (0, 0), angle_deg: float = 35, kernel_size: int = KERNEL_SIZE) -> np.array:
+        if major_axis < minor_axis:
+            major_axis, minor_axis = minor_axis, major_axis
+        # process angle
+        angle_rad = np.deg2rad(angle_deg)
+            
+        # define the covariance matrix
+        cov_matrix = np.array([[major_axis**2, 0], [0, minor_axis**2]])
+        
+        # find foci
+        c = np.sqrt(major_axis**2 - minor_axis**2)
+        focus = [c,0]
+        
+        # define the rotation matrix 
+        rotation_matrix = np.array([[np.cos(angle_rad), -np.sin(angle_rad)],
+                                    [np.sin(angle_rad), np.cos(angle_rad)]])
+        
+        # rotate the foci and covariance matrix
+        rotated_focus = np.dot(rotation_matrix,focus)
+        rotated_distribution = FireMap._create_rotated_distribution(mean = rotated_focus,
+                                                        cov_matrix = cov_matrix,
+                                                        rot_matrix = rotation_matrix)
+        
+        # sample from the rotated distribution at kernel positions
+        x, y = np.meshgrid(np.linspace(-2, 2, kernel_size),
+                        np.linspace(-2, 2, kernel_size))
+        pos = np.dstack((x, y))
+        ellipse = rotated_distribution.pdf(pos)
+        
+        # Normalize the ellipse
+        ellipse /= np.max(ellipse)
+            
+        return ellipse
 
 def make_board(size: int = MAP_SIZE, start_intensity: int = START_INTENSITY, num_points: int = STARTING_FIRES):
     board = np.zeros((size, size))
