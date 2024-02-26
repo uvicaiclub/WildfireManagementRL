@@ -7,7 +7,7 @@ import matplotlib.colors as mcolors
 import IPython.display
 
 MAP_SIZE = 90 # Each unit is 50m x 50m
-START_INTENSITY = 3 / 6
+START_INTENSITY = 1
 STARTING_FIRES = 2
 
 # Agent names: Snap, Crackle, and Pop
@@ -27,8 +27,8 @@ FUEL_VARIANCE = 4
 MOISTURE_VARIANCE = 2
 
 MOISTURE_VISIBILITY = 0.3
-MOISTURE_INTENSITY_DAMP = 0.5
-MOISTURE_SPREAD_DAMP = 0.9
+MOISTURE_INTENSITY_DAMP = 0.6
+MOISTURE_SPREAD_DAMP = 0.93
 MOISTURE_DECAY_RATE = 5e-3
 HUMIDITY_SCALAR = 0.1
 MOISTURE_INTENSITY_SCALAR = 5e-2
@@ -123,7 +123,8 @@ class FireMap:
         # Default case if none of the conditions are met
         default = np.clip(intensity, -1, 1)
 
-        self.state[:, :, INTENSITY] = np.select(conditions, choices, default=default)
+        # snap to nearest multiple of 6
+        self.state[:, :, INTENSITY] = np.round(np.select(conditions, choices, default=default) * 6) / 6
         self.state[:, :, FUEL] -= self.state[:, :, INTENSITY] * FUEL_CONSUMPTION_RATE
         self.time += 1
         
@@ -151,7 +152,9 @@ class FireMap:
         Including markers for active agents
         """
         IPython.display.clear_output(wait=True)
-        intensity_cm = mcolors.LinearSegmentedColormap.from_list('', ["gray", "green", "red"], N=100)
+        colors = ["gray", "gray", "gray", "gray", "green", "yellow", "orange", "lightcoral", "red"]
+        nodes = [-1, 0, 1/6, 2/6, 3/6, 4/6, 5/6, 1]  # Define nodes for color transitions
+        intensity_cm = mcolors.LinearSegmentedColormap.from_list("", colors, N=256)
         moisture_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "darkblue"], N=100)
         plt.figure(figsize=(3,3))
         plt.imshow(self.state[:,:,INTENSITY], cmap=intensity_cm, interpolation='none', vmin=-1, vmax=1)
