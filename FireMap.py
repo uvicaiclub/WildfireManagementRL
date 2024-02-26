@@ -14,7 +14,8 @@ STARTING_FIRES = 2
 # Or Alvin, Simon, and Theodore
 INTENSITY, FUEL, MOISTURE, ELEVATION, SELF_EXTINGUISH, WIND_X, WIND_Y, HUMIDITY, NUM_LAYERS = 0, 1, 2, 3, 4, 5, 6, 7, 8
 
-IGNITION_RATE = 0.4 # Increase the time required for the fire to spread
+IGNITION_RATE = 0.05 # Increase the time required for the fire to spread
+TEMP_CHANGE_RATE = 0.3
 FIRST_JUMP_RATIO = 1.1
 
 AGENT_AREA = 3
@@ -26,7 +27,7 @@ MOISTURE_VARIANCE = 2
 FUEL_CONSUMPTION_RATE = 0.02
 
 MOISTURE_VISIBILITY = 0.3
-MOISTURE_INTENSITY_DAMP = 0
+MOISTURE_INTENSITY_DAMP = 0.5
 MOISTURE_SPREAD_DAMP = 0.9
 
 # For normalization
@@ -43,26 +44,35 @@ KERNEL_BASIC_AXIS = 0.2
 KERNEL_MINOR_SLOPE = 0.1
 KERNEL_MAJOR_SLOPE = 0.3
 
+# clip to max intensity when fuel is below threshold
+CLIP_1 = 0.1
+CLIP_2 = 0.2
+CLIP_3 = 0.3
+CLIP_4 = 0.4
+
 class FireMap:
     """
     State values:
     0: Intensity of fire [0-6]
-    1: Fuel available (starts at 100; burn ~intensity each day)
+    1: Fuel available (starts at 100%; burn ~intensity each day)
     2: Moisture
-    3: Elevation (not priority)
+    3: Elevation (not a priority)
     4: Cell has self-extinguished
-    5,6: Wind (x,y), will be a scalar across entire map
-    7: Humidity, will be a scalar across entire map
+    5,6: Wind (x,y), scalar across entire map
+    7: Humidity, scalar across entire map
     """
     def __init__(self, board: np.array) -> None:
+        # Initialize state object
         self.state = np.zeros((MAP_SIZE, MAP_SIZE, NUM_LAYERS))
         self.state[:, :, INTENSITY] = board
         self.state[:, :, FUEL] = (1 - MIN_FUEL) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_FUEL
         self.state[:, :, MOISTURE] = (1 - MIN_MOISTURE) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_MOISTURE
+        # self.state[:, :, SELF_EXTINGUISH] = ...
         self.state[:, :, ELEVATION] = (1 - MIN_ELEVATION) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_ELEVATION
         self.state[:, :, HUMIDITY] = (1 - MIN_HUMIDITY) * np.random.random() + MIN_HUMIDITY
 
-        wind_x, wind_y = self._init_wind() # Establish unit vector of wind (in any quadrant)
+        # Establish wind unit vector and fixed wind kernel
+        wind_x, wind_y = self._init_wind()
         self.state[:, :, WIND_X] = wind_x
         self.state[:, :, WIND_Y] = wind_y
         self.kernel = FireMap._generate_kernel(wind_x, wind_y)
@@ -80,17 +90,34 @@ class FireMap:
     def next(self, actions: list[tuple[float, float]]) -> None:
         intensity = self.state[:, :, INTENSITY]
         fuel = self.state[:, :, FUEL]
-        moisture = self.state[:, :, MOISTURE]
         # elevation = self.state[:, :, ELEVATION]
 
         self._make_actions(actions)
         self.prev_actions = actions
+        moisture = self.state[:, :, MOISTURE]
         
-        intensity_of_neighbours, non_zero_neighbours = FireMap._get_neighbours(intensity, self.kernel)
-        intensity = FireMap._get_new_ignitions(intensity, intensity_of_neighbours, non_zero_neighbours, moisture)
-        intensity = np.where(fuel > 0, intensity, -1)
+        intensity = FireMap._get_new_intensity(intensity, moisture, self.kernel)
 
-        self.state[:, :, INTENSITY] = np.clip(intensity, -1, 1)
+        conditions = [
+            fuel <= 0,
+            fuel < CLIP_1,
+            fuel < CLIP_2,
+            fuel < CLIP_3,
+            fuel < CLIP_4
+        ]
+
+        choices = [
+            -1,  # If fuel <= 0, intensity is set to -1
+            np.clip(intensity, -1, 1 / MAX_INTENSITY),  # If fuel < CLIP_1
+            np.clip(intensity, -1, 2 / MAX_INTENSITY),  # If fuel < CLIP_2
+            np.clip(intensity, -1, 3 / MAX_INTENSITY),  # If fuel < CLIP_3
+            np.clip(intensity, -1, 4 / MAX_INTENSITY)   # If fuel < CLIP_4
+        ]
+
+        # Default case if none of the conditions are met
+        default = np.clip(intensity, -1, 1)
+
+        self.state[:, :, INTENSITY] = np.select(conditions, choices, default=default)
         self.state[:, :, FUEL] -= self.state[:, :, INTENSITY] * FUEL_CONSUMPTION_RATE
         self.time += 1
         
@@ -130,42 +157,36 @@ class FireMap:
         wind_x = self.state[0, 0, WIND_X]
         wind_y = self.state[0, 0, WIND_Y]
 
-        # plt.imshow(self.kernel)
-
         plt.quiver(MAP_SIZE / 2, MAP_SIZE / 2, wind_x, wind_y, scale=3, color='black', width=0.02, headwidth=3, headlength=4)
-
-
 
         for (x, y) in self.prev_actions:
             plt.scatter(AGENT_AREA*x + 1, AGENT_AREA*y + 1, c='white')
         plt.show()
-        
-    @staticmethod
-    def _get_neighbours(intensity: np.array, kernel: np.array) -> tuple[np.array, np.array]:
-        """
-        Intensity of neighbours: sum of intensity
-        Non-zero neighbours: count of active, burning neighbours
-        """
-        binary_intensity = (intensity > 0).astype(int)
-
-        intensity_of_neighbours = scipy.signal.convolve2d(intensity, kernel, mode='same', boundary='fill', fillvalue=0)        
-        non_zero_neighbours = scipy.signal.convolve2d(binary_intensity, kernel, mode='same', boundary='fill', fillvalue=0)
-        
-        return intensity_of_neighbours, non_zero_neighbours
 
     @staticmethod
-    def _get_new_ignitions(intensity: np.array, intensity_of_neighbours: np.array, non_zero_neighbours: np.array, moisture: np.array) -> np.array:
-        """
-        Find empty cells
-        Ignite probabilistically based on number of adjacent fires
-        """
-        adjusted_intensity_jump = np.where(non_zero_neighbours > 0, intensity_of_neighbours/non_zero_neighbours *FIRST_JUMP_RATIO*(1 - moisture * MOISTURE_INTENSITY_DAMP), 0)
-        # adjusted_intensity_jump = np.rint(adjusted_intensity_jump * 6) / 3
+    def _get_new_intensity(intensity: np.array, moisture: np.array, kernel: np.array) -> np.array:
+        def _get_neighbours(intensity: np.array, kernel: np.array) -> tuple[np.array, np.array]:
+            binary_intensity = (intensity > 0).astype(int)
+            intensity_of_neighbours = scipy.signal.convolve2d(intensity, kernel, mode='same', boundary='fill', fillvalue=0)        
+            non_zero_neighbours = scipy.signal.convolve2d(binary_intensity, kernel, mode='same', boundary='fill', fillvalue=0)
+            return intensity_of_neighbours, non_zero_neighbours
 
-        ignition_decision = np.random.random((MAP_SIZE, MAP_SIZE)) < non_zero_neighbours / 8.0 * IGNITION_RATE * (1 - moisture * MOISTURE_SPREAD_DAMP)
-        new_ignitions = (intensity == 0) & ignition_decision
+        intensity_of_neighbours, non_zero_neighbours = _get_neighbours(intensity, kernel)
+
+        coin_flips = np.random.random((MAP_SIZE, MAP_SIZE))
+        old_increase = (intensity > 0) & (coin_flips < TEMP_CHANGE_RATE * (1 + intensity_of_neighbours) * (1 - moisture * MOISTURE_SPREAD_DAMP) / intensity)
+        old_decrease = (intensity > 0) & (coin_flips < TEMP_CHANGE_RATE / (1 + intensity_of_neighbours) / (1 - moisture * MOISTURE_SPREAD_DAMP) * intensity)
+
+        # Higher number of neighbours and lower moisture -> higher chance of igniting
+        new_ignitions = (intensity == 0) & (coin_flips < non_zero_neighbours * IGNITION_RATE * (1 - moisture * MOISTURE_SPREAD_DAMP))
+        new_ignition_intensity = np.where(non_zero_neighbours > 0, np.clip(intensity_of_neighbours / non_zero_neighbours * FIRST_JUMP_RATIO * (1 - moisture * MOISTURE_INTENSITY_DAMP), 1/MAX_INTENSITY, 1), 0)
         
-        return np.where(new_ignitions, adjusted_intensity_jump, intensity)
+        increased_intensity = np.where(old_increase, intensity + 1/MAX_INTENSITY, intensity)
+        decreased_intensity = np.where(old_decrease, np.clip(intensity - 1/MAX_INTENSITY, 0, 1), increased_intensity)
+
+        # Then, apply the new ignition intensity for new ignitions
+        final_intensity = np.where(new_ignitions, new_ignition_intensity, decreased_intensity) 
+        return final_intensity
 
     def get_done(self) -> bool:
         """
