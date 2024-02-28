@@ -57,6 +57,9 @@ class FireMap:
         self.state[:, :, ELEVATION] = (1 - MIN_ELEVATION) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_ELEVATION
         self.state[:, :, HUMIDITY] = (1 - MIN_HUMIDITY) * np.random.random() + MIN_HUMIDITY
 
+        # Set previous state to calculate reward
+        self.prev_state = self.state
+
         wind_x, wind_y = self._init_wind() # Establish unit vector of wind (in any quadrant)
         self.state[:, :, WIND_X] = wind_x
         self.state[:, :, WIND_Y] = wind_y
@@ -89,6 +92,7 @@ class FireMap:
 
         self.state[:, :, INTENSITY] = np.clip(intensity, -1, 1)
         self.state[:, :, FUEL] -= self.state[:, :, INTENSITY] * FUEL_CONSUMPTION_RATE
+        #print(np.where(self.state[:, :, INTENSITY] == -1))
         self.time += 1
         
     def _make_actions(self, actions: list[tuple[float, float]]) -> None:
@@ -109,7 +113,7 @@ class FireMap:
                 self.state[x:x+AGENT_AREA, y:y+AGENT_AREA, MOISTURE] = np.clip(self.state[x:x+AGENT_AREA, y:y+AGENT_AREA, MOISTURE] + ADD_SURROUNDING_MOISTURE, 0, 1)
                 self.state[x+1, y+1, MOISTURE] = np.clip(self.state[x+1, y+1, MOISTURE] + ADD_CENTER_MOISTURE, 0, 1)
 
-    def show(self) -> None:
+    def show(self, iter) -> None:
         """
         Display heatmap of current fire intensities
         Including markers for active agents
@@ -140,7 +144,11 @@ class FireMap:
 
         for (x, y) in self.prev_actions:
             plt.scatter(AGENT_AREA*x + 1, AGENT_AREA*y + 1, c='white')
-        plt.show()
+
+        name_of_file = f'firemap_iter_{iter}'
+        plt.savefig(fname=f"odds_and_ends/runs/{name_of_file}")
+        #plt.show()
+        plt.close()
         
     @staticmethod
     def _get_neighbours(intensity: np.array, kernel: np.array) -> tuple[np.array, np.array]:
@@ -161,7 +169,12 @@ class FireMap:
         Find empty cells
         Ignite probabilistically based on number of adjacent fires
         """
-        adjusted_intensity_jump = np.where(non_zero_neighbours > 0, intensity_of_neighbours/non_zero_neighbours *FIRST_JUMP_RATIO*(1 - moisture * MOISTURE_INTENSITY_DAMP), 0)
+ 
+        #plt.imshow(non_zero_neighbours)
+        #plt.show()
+        
+        # adjusted_intensity_jump = np.where(non_zero_neighbours > 0, intensity_of_neighbours/non_zero_neighbours *FIRST_JUMP_RATIO*(1 - moisture* MOISTURE_INTENSITY_DAMP), 0)
+        adjusted_intensity_jump = np.where(non_zero_neighbours > 0, (intensity_of_neighbours)*FIRST_JUMP_RATIO, 0)
         # adjusted_intensity_jump = np.rint(adjusted_intensity_jump * 6) / 3
 
         ignition_decision = np.random.random((MAP_SIZE, MAP_SIZE)) < non_zero_neighbours / 8.0 * IGNITION_RATE * (1 - moisture * MOISTURE_SPREAD_DAMP)
@@ -190,14 +203,83 @@ class FireMap:
         Game over if no burning cells
         Or if one agent dies
         """
-        return self.game_over or np.sum(self.state[:, :, INTENSITY] > 0) == 0
+        return self.game_over or np.sum(self.state[:, :, INTENSITY] > 0) == 0 or self.time > 300
     
-    def get_reward(self) -> int:
+    def get_reward(self, actions) -> int:
         """
-        Negative reward for each actively burning cell
-        Large negative reward if an agent dies
+        Reward function:
+        When we're not at an edge case, we calculate rewards based on how good the action was for the environment.
+        We calculate:
+            1. How much moisture was added to the environment at all.
+            2. How much difference did the action taken have to the active fires
+            3. How close the fires are to the edge of the environment.
         """
-        return - np.sum(self.state[:, :, INTENSITY] > 0) - 10000 * self.game_over
+        if self.game_over:
+            return -100
+        
+        elif self.time > 300:
+            return -50
+        
+        elif np.sum(self.state[:, :, INTENSITY] > 0) == 0:
+            return 50
+
+        else:
+            # Get our moisture map from the previous state
+            moisture_map = np.abs(self.prev_state[:, :, MOISTURE] - 1)
+            moisture_map = np.array(np.where(self.state[:, :, INTENSITY] == -1, 0, moisture_map))
+
+            moisture_added = 0.0
+            intensity_decreased = 0.0
+            fires = np.array(np.where(self.state[:, :, INTENSITY] > 0))
+            fires_pos = list(zip(fires[0], fires[1]))
+
+            for action_x, action_y in actions:
+                for x in [-1, 0, 1]:
+                    for y in [-1, 0, 1]:
+                        try: 
+                            action_aoe = (action_x + x, action_y + y)
+                            moisture_added += moisture_map[action_aoe[0], action_aoe[1]]
+                            if action_aoe in fires_pos:
+                                #print(intensity_decreased)
+                                intensity_decreased += 1.5
+                        except IndexError:
+                            pass
+
+            if intensity_decreased < 1.0:
+                intensity_decreased = -5
+
+            #plt.imshow(moisture_map)
+            #plt.colorbar()
+            #plt.show()
+
+            # Calculate reward based on distance fires are to the edge
+            fires -= 45
+            max_distance = np.max(np.abs(fires.flatten()))
+
+            if max_distance >= 45:
+                self.game_over = True
+                max_distance *= 10
+
+
+            #print(f'Moist: {moisture_levels = }')
+            #print(f'BURNT: {burnt_levels = }')
+            #print(f'Fire: {fire_levels = }')
+
+            # todo: add component to measure how on fire on average the map is. 
+            # not relevant right now because 6 fires are common
+
+            total = -1*max_distance
+
+            #print(moisture_added*1.5, ' ---- ', intensity_decreased, ' ---- ', -1*max_distance)
+
+            # reset prev.state
+            if self.time > 1:
+                self.prev_state = self.state
+            else:
+                pass
+            #print(f'{total = }')
+
+            return total
     
     def get_info(self) -> dict:
         return {}
@@ -222,9 +304,12 @@ def make_board(size: int = MAP_SIZE, start_intensity: int = START_INTENSITY, num
         # Prevent choosing more points than available zeros
         num_points = len(zero_indices)
 
-    fire_indices = np.random.choice(len(zero_indices), size=num_points, replace=False)
-    for index in fire_indices:
-        board[tuple(zero_indices[index])] = start_intensity
+    # Centering starting fires
+    # TODO: refactor
+    fire_indices = np.random.choice(30, size=6, replace=False) + 30 
+    
+    for x, y in zip(fire_indices[:3], fire_indices[3:]):
+        board[x, y] = start_intensity
     
     return board
 
