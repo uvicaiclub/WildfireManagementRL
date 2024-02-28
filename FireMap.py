@@ -1,58 +1,71 @@
 import numpy as np
 import scipy
-import math
-
+import json
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import IPython.display
 
-MAP_SIZE = 90 # Each unit is 50m x 50m
-START_INTENSITY = 1
-STARTING_FIRES = 2
+with open('fire_simulation_settings.json', 'r') as f:
+    settings = json.load(f)
+
+# Use settings from the loaded JSON
+MAP_SIZE = settings["MAP_SIZE"]
+START_INTENSITY = settings["START_INTENSITY"]
+STARTING_FIRES = settings["STARTING_FIRES"]
+MAP_SIZE = settings["MAP_SIZE"] # Each unit is 50m x 50m
+START_INTENSITY = settings["START_INTENSITY"]
+STARTING_FIRES = settings["STARTING_FIRES"]
 
 # Agent names: Snap, Crackle, and Pop
 # Or Alvin, Simon, and Theodore
-INTENSITY, FUEL, MOISTURE, ELEVATION, SELF_EXTINGUISH, WIND_X, WIND_Y, HUMIDITY, NUM_LAYERS = 0, 1, 2, 3, 4, 5, 6, 7, 8
+INTENSITY = settings["INTENSITY"]
+FUEL = settings["FUEL"]
+MOISTURE = settings["MOISTURE"]
+ELEVATION = settings["ELEVATION"]
+SELF_EXTINGUISH = settings["SELF_EXTINGUISH"] 
+WIND_X = settings["WIND_X"] 
+WIND_Y = settings["WIND_Y"] 
+HUMIDITY = settings["HUMIDITY"]
+NUM_LAYERS = settings["NUM_LAYERS"]
+IGNITION_RATE = settings["IGNITION_RATE"] # Increase the time required for the fire to spread
+FUEL_CONSUMPTION_RATE = settings["FUEL_CONSUMPTION_RATE"]
+TEMP_CHANGE_RATE = settings["TEMP_CHANGE_RATE"]
+FIRST_JUMP_RATIO = settings["FIRST_JUMP_RATIO"]
+MOISTURE_DRY_RATE = settings["MOISTURE_DRY_RATE"]
+MOISTURE_DECAY_RATE = settings["MOISTURE_DECAY_RATE"]
+AGENT_AREA = settings["AGENT_AREA"]
+ADD_CENTER_MOISTURE = settings["ADD_CENTER_MOISTURE"]
+ADD_SURROUNDING_MOISTURE = settings["ADD_SURROUNDING_MOISTURE"]
+FUEL_VARIANCE = settings["FUEL_VARIANCE"]
+MOISTURE_VARIANCE = settings["MOISTURE_VARIANCE"]
 
-IGNITION_RATE = 0.1 # Increase the time required for the fire to spread
-FUEL_CONSUMPTION_RATE = 0.1
-TEMP_CHANGE_RATE = 0.5
-FIRST_JUMP_RATIO = 1.5
-
-AGENT_AREA = 3
-ADD_CENTER_MOISTURE = 0.4
-ADD_SURROUNDING_MOISTURE = 0.2
-
-FUEL_VARIANCE = 4
-MOISTURE_VARIANCE = 2
-
-MOISTURE_VISIBILITY = 0.3
-MOISTURE_INTENSITY_DAMP = 0.6
-MOISTURE_SPREAD_DAMP = 0.93
-MOISTURE_DECAY_RATE = 5e-3
-HUMIDITY_SCALAR = 0.1
-MOISTURE_INTENSITY_SCALAR = 5e-2
-MOISTURE_KERNEL_SCALAR = 0.1
-MOISTURE_DRY_RATE = 1e-2
+SHOW_AGENTS = settings["SHOW_AGENTS"]
+MOISTURE_VISIBILITY = settings["MOISTURE_VISIBILITY"]
+MOISTURE_INTENSITY_DAMP = settings["MOISTURE_INTENSITY_DAMP"]
+MOISTURE_SPREAD_DAMP = settings["MOISTURE_SPREAD_DAMP"]
+HUMIDITY_SCALAR = settings["HUMIDITY_SCALAR"]
+MOISTURE_INTENSITY_SCALAR = settings["MOISTURE_INTENSITY_SCALAR"]
+MOISTURE_KERNEL_SCALAR = settings["MOISTURE_KERNEL_SCALAR"]
 
 # For normalization
-MAX_INTENSITY = 6 # Corresponding to 6 ranks of fire
-MIN_FUEL = 0
-MIN_MOISTURE = 0.2
-MIN_ELEVATION = 0
+MAX_INTENSITY = settings["MAX_INTENSITY"] # Corresponding to 6 ranks of fire
+MIN_FUEL = settings["MIN_FUEL"]
+MIN_MOISTURE = settings["MIN_MOISTURE"]
+MIN_ELEVATION = settings["MIN_ELEVATION"]
 
-KERNEL_SIZE = 7
-KERNEL_INTENSITY = 0.7
-KERNEL_INTENSITY_WEIGHT = 0.5
-KERNEL_BASIC_AXIS = 0.2
-KERNEL_MINOR_SLOPE = 0.1
-KERNEL_MAJOR_SLOPE = 0.3
+DRYING_KERNEL_SIZE = settings["DRYING_KERNEL_SIZE"]
+KERNEL_SIZE = settings["KERNEL_SIZE"]
+KERNEL_INTENSITY = settings["KERNEL_INTENSITY"]
+KERNEL_INTENSITY_WEIGHT = settings["KERNEL_INTENSITY_WEIGHT"]
+KERNEL_BASIC_AXIS = settings["KERNEL_BASIC_AXIS"]
+KERNEL_MINOR_SLOPE = settings["KERNEL_MINOR_SLOPE"]
+KERNEL_MAJOR_SLOPE = settings["KERNEL_MAJOR_SLOPE"]
 
 # clip to max intensity when fuel is below threshold
-CLIP_1 = 0.1
-CLIP_2 = 0.2
-CLIP_3 = 0.3
-CLIP_4 = 0.4
+CLIP_1 = settings["CLIP_1"]
+CLIP_2 = settings["CLIP_2"]
+CLIP_3 = settings["CLIP_3"]
+CLIP_4 = settings["CLIP_4"]
 
 class FireMap:
     """
@@ -80,6 +93,7 @@ class FireMap:
         self.state[:, :, WIND_X] = wind_x
         self.state[:, :, WIND_Y] = wind_y
         self.kernel = FireMap._generate_kernel(wind_x, wind_y)
+        self.dry_kernel = FireMap._generate_kernel(wind_x, wind_y, DRYING_KERNEL_SIZE)
 
         self.prev_actions = []
         self.time = 0
@@ -102,7 +116,9 @@ class FireMap:
         
         intensity_of_neighbours, non_zero_neighbours = FireMap._get_neighbours(intensity, self.kernel)
         intensity = FireMap._get_new_intensity(intensity, moisture, intensity_of_neighbours, non_zero_neighbours)
-        self.state[:, :, MOISTURE] = moisture + (self.state[:,:,HUMIDITY] - moisture) * MOISTURE_DECAY_RATE * np.random.random((MAP_SIZE, MAP_SIZE)) - np.clip(intensity + intensity_of_neighbours,0,1) * MOISTURE_DRY_RATE
+
+        drying_affect = scipy.signal.convolve2d(intensity, self.dry_kernel, mode='same', boundary='fill', fillvalue=0)  
+        self.state[:, :, MOISTURE] = moisture + (self.state[:,:,HUMIDITY] - moisture) * MOISTURE_DECAY_RATE * np.random.random((MAP_SIZE, MAP_SIZE)) - np.clip(drying_affect,0,1) * MOISTURE_DRY_RATE
 
         conditions = [
             fuel <= 0,
@@ -168,8 +184,9 @@ class FireMap:
 
         plt.quiver(MAP_SIZE / 2, MAP_SIZE / 2, wind_x, wind_y, scale=3, color='black', width=0.02, headwidth=3, headlength=4)
 
-        for (x, y) in self.prev_actions:
-            plt.scatter(AGENT_AREA*x + 1, AGENT_AREA*y + 1, c='white')
+        if SHOW_AGENTS:
+            for (x, y) in self.prev_actions:
+                plt.scatter(AGENT_AREA*x + 1, AGENT_AREA*y + 1, c='white')
         plt.show()
 
     @staticmethod
@@ -214,13 +231,13 @@ class FireMap:
         return {}
 
     @staticmethod
-    def _generate_kernel(windx: float, windy: float, wind_speed: float = 1, intensity: float = KERNEL_INTENSITY) -> np.array:
+    def _generate_kernel(windx: float, windy: float, kernel_size: float = KERNEL_SIZE, wind_speed: float = 1, intensity: float = KERNEL_INTENSITY) -> np.array:
         wind_angle = np.rad2deg(np.arctan2(windy, windx))
         _intensity_bonus = intensity * KERNEL_INTENSITY_WEIGHT
         major_axis = KERNEL_BASIC_AXIS + KERNEL_MAJOR_SLOPE * wind_speed + _intensity_bonus
         minor_axis = KERNEL_BASIC_AXIS + KERNEL_MINOR_SLOPE * wind_speed + _intensity_bonus
 
-        return FireMap._new_kernel(major_axis, minor_axis, angle_deg = wind_angle) * intensity
+        return FireMap._new_kernel(major_axis, minor_axis, kernel_size, angle_deg = wind_angle) * intensity
     
     @staticmethod
     def _create_rotated_distribution(mean, cov_matrix, rot_matrix):    
@@ -235,7 +252,7 @@ class FireMap:
         return rotated_distribution
 
     @staticmethod
-    def _new_kernel(major_axis: float, minor_axis: float, center: tuple[float, float] = (0, 0), angle_deg: float = 35, kernel_size: int = KERNEL_SIZE) -> np.array:
+    def _new_kernel(major_axis: float, minor_axis: float, kernel_size: int, center: tuple[float, float] = (0, 0), angle_deg: float = 35) -> np.array:
         if major_axis < minor_axis:
             major_axis, minor_axis = minor_axis, major_axis
         # process angle
