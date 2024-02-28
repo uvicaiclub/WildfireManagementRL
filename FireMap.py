@@ -4,6 +4,8 @@ import json
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import IPython.display
+from noise import pnoise2
+import random
 
 with open('fire_simulation_settings.json', 'r') as f:
     settings = json.load(f)
@@ -82,11 +84,12 @@ class FireMap:
         # Initialize state object
         self.state = np.zeros((MAP_SIZE, MAP_SIZE, NUM_LAYERS))
         self.state[:, :, INTENSITY] = board
-        self.state[:, :, FUEL] = (1 - MIN_FUEL) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_FUEL
-        self.state[:, :, MOISTURE] = (1 - MIN_MOISTURE) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_MOISTURE
+        self.state[:, :, FUEL] = (1 - MIN_FUEL) * FireMap.generate_perlin_noise(MAP_SIZE, MAP_SIZE) + MIN_FUEL
+        self.state[:, :, MOISTURE] = (1 - MIN_MOISTURE) * FireMap.generate_perlin_noise(MAP_SIZE, MAP_SIZE) + MIN_MOISTURE
         # self.state[:, :, SELF_EXTINGUISH] = ...
-        self.state[:, :, ELEVATION] = (1 - MIN_ELEVATION) * np.random.random((MAP_SIZE, MAP_SIZE)) + MIN_ELEVATION
-        self.state[:, :, HUMIDITY] = np.random.random()
+        self.state[:, :, ELEVATION] = (1 - MIN_ELEVATION) * FireMap.generate_perlin_noise(MAP_SIZE, MAP_SIZE) + MIN_ELEVATION
+        self.state[:, :, HUMIDITY] = 0.3
+        # self.state[:, :, HUMIDITY] = np.random.random()
 
         # Establish wind unit vector and fixed wind kernel
         wind_x, wind_y = self._init_wind()
@@ -118,10 +121,10 @@ class FireMap:
         intensity_of_neighbours, non_zero_neighbours = FireMap._get_neighbours(intensity, self.kernel)
         intensity = FireMap._get_new_intensity(intensity, moisture, intensity_of_neighbours, non_zero_neighbours)
 
-        drying_affect = scipy.signal.convolve2d(np.clip(intensity,0,1), self.dry_kernel, mode='same', boundary='fill', fillvalue=0)  
+        drying_affect = scipy.signal.convolve2d(np.clip(intensity,0,1), self.dry_kernel, mode='same', boundary='fill', fillvalue=0)
         large_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=20, origin=0)
-        small_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=6)
-        dilation_mask = (large_dilation ^ small_dilation) # binary
+        small_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=3)
+        dilation_mask = (large_dilation ^ small_dilation)  # binary mask for perimeter zone
         self.ring = np.where(dilation_mask, np.clip(drying_affect,0,1000) * (1 - self.state[:,:,MOISTURE]), 0)
         # self.ring = np.clip(drying_affect,0,1000)
 
@@ -292,6 +295,40 @@ class FireMap:
         ellipse /= np.max(ellipse)
             
         return ellipse
+    
+    @staticmethod
+    def generate_perlin_noise(width, height, scale=15.0, octaves=100, persistence=0.5, lacunarity=2):
+        """
+        Generate a 2D numpy array of perlin noise with a randomized seed.
+
+        Args:
+        - width (int): Width of the generated noise array.
+        - height (int): Height of the generated noise array.
+        - scale (float): Scale affects the distance between the points in the noise function.
+        - octaves (int): The number of levels of detail you want the noise to have.
+        - persistence (float): Amplitude multiplier for each octave.
+        - lacunarity (float): Frequency multiplier for each octave.
+
+        Returns:
+        - np.array: 2D array of perlin noise values.
+        """
+        noise_array = np.zeros((height, width))
+        base = random.randint(0, 100)
+
+        for x in range(width):
+            for y in range(height):
+                noise_val = pnoise2(x / scale, 
+                                    y / scale, 
+                                    octaves=octaves, 
+                                    persistence=persistence, 
+                                    lacunarity=lacunarity, 
+                                    repeatx=width, 
+                                    repeaty=height,
+                                    base=base)  # Use the random base here
+                noise_array[y, x] = noise_val
+        noise_array = (noise_array - noise_array.min()) / (noise_array.max() - noise_array.min())
+
+        return noise_array
 
 def make_board(size: int = MAP_SIZE, start_intensity: int = START_INTENSITY, num_points: int = STARTING_FIRES):
     board = np.zeros((size, size))
