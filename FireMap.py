@@ -98,6 +98,7 @@ class FireMap:
         self.prev_actions = []
         self.time = 0
         self.game_over = False
+        self.ring = None
 
     def _init_wind(self) -> tuple[float, float]:
         wind_direction = np.random.random() * 2 * np.pi
@@ -117,8 +118,15 @@ class FireMap:
         intensity_of_neighbours, non_zero_neighbours = FireMap._get_neighbours(intensity, self.kernel)
         intensity = FireMap._get_new_intensity(intensity, moisture, intensity_of_neighbours, non_zero_neighbours)
 
-        drying_affect = scipy.signal.convolve2d(intensity, self.dry_kernel, mode='same', boundary='fill', fillvalue=0)  
-        self.state[:, :, MOISTURE] = moisture + (self.state[:,:,HUMIDITY] - moisture) * MOISTURE_DECAY_RATE * np.random.random((MAP_SIZE, MAP_SIZE)) - np.clip(drying_affect,0,1) * MOISTURE_DRY_RATE
+        drying_affect = scipy.signal.convolve2d(np.clip(intensity,0,1), self.dry_kernel, mode='same', boundary='fill', fillvalue=0)  
+        large_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=20, origin=0)
+        small_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=6)
+        dilation_mask = (large_dilation ^ small_dilation) # binary
+        self.ring = np.where(dilation_mask, np.clip(drying_affect,0,1000) * (1 - self.state[:,:,MOISTURE]), 0)
+        # self.ring = np.clip(drying_affect,0,1000)
+
+
+        self.state[:, :, MOISTURE] = moisture + (self.state[:,:,HUMIDITY] - moisture) * MOISTURE_DECAY_RATE - np.clip(drying_affect,0,1) * MOISTURE_DRY_RATE
 
         conditions = [
             fuel <= 0,
@@ -168,8 +176,7 @@ class FireMap:
         Including markers for active agents
         """
         IPython.display.clear_output(wait=True)
-        colors = ["gray", "gray", "gray", "gray", "green", "yellow", "orange", "lightcoral", "red"]
-        nodes = [-1, 0, 1/6, 2/6, 3/6, 4/6, 5/6, 1]  # Define nodes for color transitions
+        colors = ["gray", "gray", "gray", "gray", "gray", "gray", "green", "yellow", "gold", "orange", "darkorange", "red", "darkred"]
         intensity_cm = mcolors.LinearSegmentedColormap.from_list("", colors, N=256)
         moisture_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "darkblue"], N=100)
         plt.figure(figsize=(3,3))
@@ -186,7 +193,7 @@ class FireMap:
 
         if SHOW_AGENTS:
             for (x, y) in self.prev_actions:
-                plt.scatter(AGENT_AREA*x + 1, AGENT_AREA*y + 1, c='white')
+                plt.scatter(AGENT_AREA*y + 1, AGENT_AREA*x + 1, c='white')
         plt.show()
 
     @staticmethod
@@ -228,7 +235,7 @@ class FireMap:
         return - np.sum(self.state[:, :, INTENSITY] > 0) - 10000 * self.game_over
     
     def get_info(self) -> dict:
-        return {}
+        return self.ring / np.sum(self.ring)
 
     @staticmethod
     def _generate_kernel(windx: float, windy: float, kernel_size: float = KERNEL_SIZE, wind_speed: float = 1, intensity: float = KERNEL_INTENSITY) -> np.array:
@@ -289,15 +296,10 @@ class FireMap:
 def make_board(size: int = MAP_SIZE, start_intensity: int = START_INTENSITY, num_points: int = STARTING_FIRES):
     board = np.zeros((size, size))
 
-    # Set starting fires without looping, ensuring unique locations
-    zero_indices = np.column_stack(np.where(board == 0))
-    if len(zero_indices) < num_points:
-        # Prevent choosing more points than available zeros
-        num_points = len(zero_indices)
+    fire_indices = [(np.random.randint(size / 4, 3 * size / 4), np.random.randint(size / 4, 3 * size / 4)) for _ in range(num_points)]
 
-    fire_indices = np.random.choice(len(zero_indices), size=num_points, replace=False)
-    for index in fire_indices:
-        board[tuple(zero_indices[index])] = start_intensity
+    for x, y in fire_indices:
+        board[x, y] = start_intensity
     
     return board
 
