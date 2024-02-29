@@ -221,7 +221,7 @@ class FireMap:
 
         # right panel
         moisture_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "darkblue"], N=100)
-        ax[1][0].set_title(f'Moisture (hum = {self.state[0,0,HUMIDITY]})')
+        ax[1][0].set_title('Moisture Channel')
         panel = ax[1][0].imshow(self.state[:,:,MOISTURE] * 100, cmap=moisture_cm, interpolation='none', vmin=0, vmax=100,origin='lower')
         plt.colorbar(panel,ax=ax[1][0],label='Moisture Level (%)')
         ax[1][0].set_xlabel('distance (m)')
@@ -241,17 +241,19 @@ class FireMap:
         ax[0][1].set_yticks(np.arange(90)[::10], (np.arange(90)*50)[::10]);
 
         # right panel
-        extinguish_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "black"], N=2)
-        ax[1][1].set_title('Extinguished Channel')
-        panel = ax[1][1].imshow(np.clip(self.state[:,:,INTENSITY],-1,0) * -1, cmap=extinguish_cm, interpolation='none', vmin=0, vmax=1, origin='lower')
-        # plt.colorbar(panel,ax=ax[1][1],label='Extinguished Cells')
-        #
+        extinguish_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "red"], N=100)
+        ax[1][1].set_title('Agent Channel')
+        panel = ax[1][1].imshow(self.ring, cmap=extinguish_cm, interpolation='none', origin='lower')
+        # plt.colorbar(panel,ax=ax[1][1],label='Next Move Probability')
         ax[1][1].set_xlabel('distance (m)')
         ax[1][1].set_xticks(np.arange(90)[::10], (np.arange(90)*50)[::10], rotation=90);
         ax[1][1].set_ylabel('distance (m)')
         ax[1][1].set_yticks(np.arange(90)[::10], (np.arange(90)*50)[::10]);
 
-        # 
+        wind_x = self.state[0, 0, WIND_X]
+        wind_y = self.state[0, 0, WIND_Y]
+        ax[1][1].quiver(MAP_SIZE / 2, MAP_SIZE / 2, wind_x, wind_y, scale=3, color='black', width=0.02, headwidth=3, headlength=4)
+
         plt.tight_layout()
         plt.show()
 
