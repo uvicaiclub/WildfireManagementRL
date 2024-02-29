@@ -7,10 +7,12 @@ import torch.optim as optim
 from torch.distributions.categorical import Categorical
 import time
 import tqdm
+import matplotlib.pyplot as plt
 
 from PPO_Agent_Misc.PPOContinuous import Agent as ContPPO
 from Simulation import FireMapEnv
 from odds_and_ends.data_processing import process_RL_outputs, process_env_for_agent
+from odds_and_ends.fireside_bonus import calc_fireside_bonus, calc_fireside_grid
 
 # HYPERPARAMETERS
 EPOCHS = 25
@@ -39,9 +41,10 @@ avg_crit_loss = []
 episode_max_ratio = []
 ep_mean_rewards = []
 
-obs = T.tensor(obs).float().to(PPO_Agent.device)
-obs = process_env_for_agent(obs)
-obs = T.flatten(obs)
+fireside = calc_fireside_grid(obs)
+obs = process_env_for_agent(obs, fireside)
+obs = T.tensor(obs, dtype=T.float32).to(PPO_Agent.device)
+print(obs)
 
 env.reset()
 for e in range(10):
@@ -70,13 +73,13 @@ for e in range(10):
         next_vf = PPO_Agent.critic.forward(obs)
         next_vf = next_vf.detach()
         advantage = PPO_Agent.get_gae(rewards, prev_vf, next_vf)
-        PPO_Agent.memory.store_memory(prev_obs, T.tensor(actions), logprob, advantage, prev_vf, T.tensor(rewards), dones)
+        PPO_Agent.memory.store_memory(prev_obs, actions, logprob, advantage, prev_vf, rewards, dones)
 
         # Learning loop
         if len(PPO_Agent.memory.states) >= NUM_MINIBATCHES*MINIBATCH:
             e_policy_loss, e_crit_loss, loss = PPO_Agent.learn()
 
-            #env.render()
+        env.render()
 
         PPO_Agent.c2 *= 0.95
         PPO_Agent.actor.var *= 0.99

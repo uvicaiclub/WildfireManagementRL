@@ -2,7 +2,7 @@ import numpy as np
 from torch import nn
 import torch
 
-def process_env_for_agent(obs) -> np.array:
+def process_env_for_agent(obs, fireside) -> np.array:
   '''
   take a NxNxL environment state, reduce it down for RL agent's input
   NOTE: hardcoded for 8 layers and 90x90.
@@ -10,10 +10,14 @@ def process_env_for_agent(obs) -> np.array:
   # scale layers
   pass # nathan has kept everything squeezed between 0 and 1
 
+  print(obs.shape)
+
   # reduce dimensions
   # (sorry. this swaps the axis of the state to put layers first, pools, adds batch representation, and fixes a transposition that got in there somehow)
   pooling_layer = nn.MaxPool2d(kernel_size=3, stride=3)
-  obs_red = np.swapaxes(pooling_layer(torch.Tensor(np.swapaxes(obs,2,0).reshape(1,8,90,90))),2,3)
+  obs_red = np.swapaxes(obs,2,0).reshape(1,8,90,90)
+  obs_red = obs_red[:, :, :3]
+  obs_red = np.concatenate(obs, fireside)
 
   # discretize observations
   # don't let agents see perfect resolution of "moisture"
