@@ -152,7 +152,7 @@ class FireMap:
 
         # snap to nearest multiple of 6
         self.state[:, :, INTENSITY] = np.round(np.select(conditions, choices, default=default) * 6) / 6
-        self.state[:, :, FUEL] -= self.state[:, :, INTENSITY] * FUEL_CONSUMPTION_RATE
+        self.state[:, :, FUEL] -= np.clip(self.state[:, :, INTENSITY] * FUEL_CONSUMPTION_RATE,0,1)
         self.time += 1
         
     def _make_actions(self, actions: list[tuple[float, float]]) -> None:
@@ -197,6 +197,62 @@ class FireMap:
         if SHOW_AGENTS:
             for (x, y) in self.prev_actions:
                 plt.scatter(AGENT_AREA*y + 1, AGENT_AREA*x + 1, c='white')
+        plt.show()
+
+    def show_detailed(self) -> None:
+        """
+        
+        """
+        IPython.display.clear_output(wait=True)
+        fig,ax = plt.subplots(nrows=2,ncols=2,
+                      figsize=(9, 9)) # width, height
+        fig.suptitle(f'Detailed View (t = {self.time})')
+
+        # left panel
+        colors = ["green", "yellow", "gold", "orange", "darkorange", "red", "darkred"]
+        intensity_cm = mcolors.LinearSegmentedColormap.from_list("", colors, N=7)
+        ax[0][0].set_title('Fire Channel')
+        panel = ax[0][0].imshow(np.clip(self.state[:,:,INTENSITY], 0, 1) * 6, cmap=intensity_cm, interpolation='none', vmin=0, vmax=6, origin='lower')
+        plt.colorbar(panel,ax=ax[0][0],label='Intensity Level (0-6)')
+        ax[0][0].set_xlabel('distance (m)')
+        ax[0][0].set_xticks(np.arange(90)[::10], (np.arange(90)*50)[::10], rotation=90);
+        ax[0][0].set_ylabel('distance (m)')
+        ax[0][0].set_yticks(np.arange(90)[::10], (np.arange(90)*50)[::10]);
+
+        # right panel
+        moisture_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "darkblue"], N=100)
+        ax[1][0].set_title(f'Moisture (hum = {self.state[0,0,HUMIDITY]})')
+        panel = ax[1][0].imshow(self.state[:,:,MOISTURE] * 100, cmap=moisture_cm, interpolation='none', vmin=0, vmax=100,origin='lower')
+        plt.colorbar(panel,ax=ax[1][0],label='Moisture Level (%)')
+        ax[1][0].set_xlabel('distance (m)')
+        ax[1][0].set_xticks(np.arange(90)[::10], (np.arange(90)*50)[::10], rotation=90);
+        ax[1][0].set_ylabel('distance (m)')
+        ax[1][0].set_yticks(np.arange(90)[::10], (np.arange(90)*50)[::10]);
+
+
+        fuel_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "darkgreen"], N=100)
+        ax[0][1].set_title('Fuel Channel')
+        panel = ax[0][1].imshow(np.clip(self.state[:,:,FUEL],0,1) * 100, cmap=fuel_cm, interpolation='none', vmin=0, vmax=100, origin='lower')
+        plt.colorbar(panel,ax=ax[0][1],label='Remaining Fuel (%)')
+        #
+        ax[0][1].set_xlabel('distance (m)')
+        ax[0][1].set_xticks(np.arange(90)[::10], (np.arange(90)*50)[::10], rotation=90);
+        ax[0][1].set_ylabel('distance (m)')
+        ax[0][1].set_yticks(np.arange(90)[::10], (np.arange(90)*50)[::10]);
+
+        # right panel
+        extinguish_cm = mcolors.LinearSegmentedColormap.from_list('', ["white", "black"], N=2)
+        ax[1][1].set_title('Extinguished Channel')
+        panel = ax[1][1].imshow(np.clip(self.state[:,:,INTENSITY],-1,0) * -1, cmap=extinguish_cm, interpolation='none', vmin=0, vmax=1, origin='lower')
+        # plt.colorbar(panel,ax=ax[1][1],label='Extinguished Cells')
+        #
+        ax[1][1].set_xlabel('distance (m)')
+        ax[1][1].set_xticks(np.arange(90)[::10], (np.arange(90)*50)[::10], rotation=90);
+        ax[1][1].set_ylabel('distance (m)')
+        ax[1][1].set_yticks(np.arange(90)[::10], (np.arange(90)*50)[::10]);
+
+        # 
+        plt.tight_layout()
         plt.show()
 
     @staticmethod

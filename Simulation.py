@@ -40,11 +40,14 @@ class FireMapEnv(gym.Env):
         self.state = FireMap(board)
         return self.state.state
 
-    def render(self, mode='human'):
+    def render(self, detailed: bool = False, mode: str ='human'):
         """
         Print current state as N * N chart
         """
-        self.state.show()
+        if detailed:
+            self.state.show_detailed()
+        else:
+            self.state.show()
 
     def close(self):
         """
