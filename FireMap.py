@@ -214,7 +214,10 @@ class FireMap:
             2. How much difference did the action taken have to the active fires
             3. How close the fires are to the edge of the environment.
         """
+
+        # TODO: Isolate rewards on edges, edge penalty. 
         if self.game_over:
+            # Danger Penalty: Running into an active fire = bad.
             return -100
         
         elif self.time > 300:
@@ -225,6 +228,7 @@ class FireMap:
 
         else:
             # Get our moisture map from the previous state
+            # ---- Moisture Opprotunity Bonus ----
             moisture_map = np.abs(self.prev_state[:, :, MOISTURE] - 1)
             moisture_map = np.array(np.where(self.state[:, :, INTENSITY] == -1, 0, moisture_map))
 
@@ -253,6 +257,8 @@ class FireMap:
             #plt.show()
 
             # Calculate reward based on distance fires are to the edge
+                
+            # ---- Distance to Edge Penalty ----
             fires -= 45
             max_distance = np.max(np.abs(fires.flatten()))
 
