@@ -26,7 +26,7 @@ class FireMapEnv(gym.Env):
         """
         self.state.next(action)
         obs = self.state.state
-        reward = self.state.get_reward()
+        reward = self.state.get_reward(action)
         done = self.state.get_done()
         info = self.state.get_info()
         return obs, reward, done, info

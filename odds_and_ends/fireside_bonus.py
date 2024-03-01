@@ -84,5 +84,10 @@ def calc_fireside_bonus(obs, actions) -> float:
     ''' --- bonus based on action --- '''
     bonus = 0
     for _x, _y in actions:
-        bonus += fireside_available[_x,_y]
+        bonus += fireside_available[_x,_y] / 25.0
+
+    if bonus == 0.0:
+        bonus = -1
+
+    #print(bonus)
     return bonus

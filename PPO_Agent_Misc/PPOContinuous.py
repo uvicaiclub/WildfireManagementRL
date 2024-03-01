@@ -10,6 +10,14 @@ import time
 device = T.device("cuda" if T.cuda.is_available() else "cpu")
 T.autograd.set_detect_anomaly(True)
 
+class relu30(nn.Module):
+    def __init__(self):
+        super(relu30, self).__init__()
+
+    def forward(self, x):
+        return T.min(T.max(T.tensor(0), x), T.tensor(30))
+        
+
 class PPOMemory:
     def __init__(self, batch_size):
         # we keep memory in mind with lists
@@ -45,6 +53,7 @@ class PPOMemory:
 
         # retrieves batch_size memories
         states_T = T.stack(self.states[:self.batch_size]).to(device)
+        states_T = T.squeeze(states_T, dim=1)
         act_logprob_tens = T.stack(self.logprobs[:self.batch_size]).to(device)
         adv_tensor = T.tensor(self.adv[:self.batch_size]).to(device)
         vals_tens = T.tensor(self.vals[:self.batch_size], dtype=T.float64).to(device)
@@ -76,9 +85,13 @@ class ActorModel(nn.Module):
         this exact same thing. The code will look similar.
 
     '''
-    def __init__(self, input_shape, n_actions, 
+    def __init__(self, input_shape, n_actions, c2,
                  min_tens = T.tensor((-1, 1)), max_tens = T.tensor((-1, 1))):
         super(ActorModel, self).__init__()
+
+        #self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=3, stride=2, padding=1)
+        #self.conv2 = nn.Conv2d(in_channels=6, out_channels=2, kernel_size=3, stride=2, padding=1)
+        #self.flat = nn.Flatten()
 
         # base model
         self.fc1 = nn.Linear(in_features=input_shape, out_features=64).to(device)
@@ -88,17 +101,22 @@ class ActorModel(nn.Module):
         self.mean = nn.Linear(in_features=64, out_features=n_actions).to(device)
 
         # Constant variance
+        self.c2 = c2
         self.var = T.diag(T.ones(n_actions)).to(device)*0.5
 
         # misc
         self.min_tens = min_tens
         self.max_tens = max_tens
+        self.relu30 = relu30()
 
     def forward(self, x):
         ''' We create a class that computes the distribution of our actions. '''
 
+        #x = F.tanh(self.conv1(x))
+        #x = F.tanh(self.conv2(x))
+        #x = self.flat(x)
         # base computation
-        x = F.tanh(self.fc1(x)).to(device)
+        x = F.tanh(self.fc1(x).to(device))
         x = F.tanh(self.fc2(x)).to(device)
 
         # we note the mean value goes through a tanh as it corresponds with the 
@@ -107,20 +125,25 @@ class ActorModel(nn.Module):
         # for our environment, depending on how we represent the raw actions, 
         # we can have positive and negative values, if we center in the middle of the board
         # for example.
-        mean = self.mean(x).to(device)
+        mean = F.sigmoid(self.mean(x)).to(device)
+        #activation = self.relu30(mean)
 
-        return mean
+        return T.squeeze(mean)
     
     def get_action_logprob(self, x):
         mean = self.forward(x)
 
         calc_mean = mean.to(device)
+        #print(f'{calc_mean = }')
+
+        mean = T.clamp(mean, 0, 29)
 
         # get action from distribution distribution
         dist = T.distributions.MultivariateNormal(calc_mean, self.var)
 
         action = dist.sample()
         logprob = dist.log_prob(action)
+        
 
         return action.to(device), logprob, mean.to(device)
     
@@ -131,12 +154,21 @@ class ActorModel(nn.Module):
         dist = T.distributions.MultivariateNormal(calc_mean, self.var)
 
         logprob = dist.log_prob(action)
+        ent = dist.entropy()
 
-        return logprob
+        return logprob, ent
+    
+    def calc_c2(self):
+        new_c2 = self.c2*0.95
+        self.c2 = max(new_c2, 0.5)
     
 class CriticModel(nn.Module):
     def __init__(self, input_shape):
         super(CriticModel, self).__init__()
+
+        #self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=3, stride=2, padding=1)
+        #self.conv2 = nn.Conv2d(in_channels=6, out_channels=2, kernel_size=3, stride=2, padding=1)
+        #self.flat = nn.Flatten()
 
         self.fc1 = nn.Linear(input_shape, 64).to(device)
         self.fc2 = nn.Linear(64, 64).to(device)
@@ -146,11 +178,14 @@ class CriticModel(nn.Module):
         '''
         Overwrites the basic call function
         '''
+        #x = F.tanh(self.conv1(x))
+        #x = F.tanh(self.conv2(x))
+        #x = self.flat(x)
         x = F.tanh(self.fc1(x)).to(device)
         x = F.tanh(self.fc2(x)).to(device)
-        x = F.tanh(self.output(x)).to(device)
+        x = self.output(x).to(device)
 
-        return x
+        return T.squeeze(x)
 
 class Agent(nn.Module):
         # An interesting note - implementations exist where actor and critic share 
@@ -175,7 +210,7 @@ class Agent(nn.Module):
         self.n_actions = n_actions
 
         #           --- Actor Critic ---
-        self.actor = ActorModel(input_dims, n_actions).float().to(device)
+        self.actor = ActorModel(input_dims, n_actions, 2).float().to(device)
         self.optimizer_actor = T.optim.Adam(self.actor.parameters(), LR)
 
         self.critic = CriticModel(input_dims).float().to(device)
@@ -188,8 +223,8 @@ class Agent(nn.Module):
         self.criterion = nn.MSELoss()
         self.annealing = annealing
         if annealing == True:
-            self.anneal_lr_actor = T.optim.lr_scheduler.StepLR(self.optimizer_actor, buffer_size*5, gamma=0.3)
-            self.anneal_lr_critic = T.optim.lr_scheduler.StepLR(self.optimizer_critic, buffer_size*5, gamma=0.3)
+            self.anneal_lr_actor = T.optim.lr_scheduler.StepLR(self.optimizer_actor, self.buffer_size, gamma=0.95)
+            self.anneal_lr_critic = T.optim.lr_scheduler.StepLR(self.optimizer_critic, self.buffer_size, gamma=0.95)
 
         self.device = T.device("cuda" if T.cuda.is_available() else "cpu")
 
@@ -262,6 +297,11 @@ class Agent(nn.Module):
 
         return advantages.clone().detach(), returns.clone().detach()
 
+    def calculate_boundary_penalty(self, action_position: T.tensor) -> T.tensor:
+        left = np.clip(action_position, a_min=-np.inf,a_max=0)
+        right = np.clip(action_position-30,a_min=0,a_max=np.inf)
+        return T.tensor(np.sum(np.max(np.vstack([abs(left),abs(right)]),axis=0))).to(device)
+
     def learn(self):
         '''
         This function iterates over our entire buffer size and trains over minibatches.
@@ -289,7 +329,9 @@ class Agent(nn.Module):
 
 
             # get logprob of action and entropy
-            new_logprobs = self.actor.calc_action_logprob_entropy(state_tens, act_tens)      
+            new_logprobs, entropy = self.actor.calc_action_logprob_entropy(state_tens, act_tens) 
+
+            entropy = T.mean(entropy)     
 
             # Get probability raio
             prob_ratios = T.exp(new_logprobs - logprob_tens).to(device)
@@ -329,7 +371,6 @@ class Agent(nn.Module):
 
             #           --- Total Loss ---
 
-        
             # Apply Advantages to Policy Loss
             policy_loss = adv_tensor*policy_loss
             policy_loss = T.mean(policy_loss).to(device)
@@ -342,7 +383,7 @@ class Agent(nn.Module):
             #crit_loss = T.max(crit_loss, crit_loss_clipped).to(device)
             crit_loss = self.c1*crit_loss.float().to(device)
 
-            loss = -policy_loss + crit_loss # - self.c2*entropy_loss
+            loss = -policy_loss + crit_loss #- self.c2*entropy
 
 
             #           --- Backpropogate ---
@@ -364,6 +405,8 @@ class Agent(nn.Module):
             total_pol_loss += policy_loss.detach().numpy()
             total_critic_loss += crit_loss.detach().numpy()
             total_loss += loss.detach().numpy()
+        
+        self.actor.calc_c2()
 
 
         return total_pol_loss, total_critic_loss, total_loss
