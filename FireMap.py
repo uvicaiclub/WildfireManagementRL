@@ -124,15 +124,15 @@ class FireMap:
         intensity_of_neighbours, non_zero_neighbours = FireMap._get_neighbours(intensity, self.kernel)
         intensity = FireMap._get_new_intensity(intensity, moisture, intensity_of_neighbours, non_zero_neighbours)
 
-        drying_affect = scipy.signal.convolve2d(np.clip(intensity,0,1), self.dry_kernel, mode='same', boundary='fill', fillvalue=0)  
-        large_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=20, origin=0)
-        small_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=6)
-        dilation_mask = (large_dilation ^ small_dilation) # binary
-        self.ring = np.where(dilation_mask, np.clip(drying_affect,0,1000) * (1 - self.state[:,:,MOISTURE]), 0)
+        #drying_affect = scipy.signal.convolve2d(np.clip(intensity,0,1), self.dry_kernel, mode='same', boundary='fill', fillvalue=0)  
+        #large_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=20, origin=0)
+        #small_dilation = scipy.ndimage.binary_dilation(abs(self.state[:,:,INTENSITY]), iterations=6)
+        #dilation_mask = (large_dilation ^ small_dilation) # binary
+        #self.ring = np.where(dilation_mask, np.clip(drying_affect,0,1000) * (1 - self.state[:,:,MOISTURE]), 0)
         # self.ring = np.clip(drying_affect,0,1000)
 
 
-        self.state[:, :, MOISTURE] = moisture + (self.state[:,:,HUMIDITY] - moisture) * MOISTURE_DECAY_RATE - np.clip(drying_affect,0,1) * MOISTURE_DRY_RATE
+        #self.state[:, :, MOISTURE] = moisture + (self.state[:,:,HUMIDITY] - moisture) * MOISTURE_DECAY_RATE - np.clip(drying_affect,0,1) * MOISTURE_DRY_RATE
 
         conditions = [
             fuel <= 0,
@@ -246,9 +246,12 @@ class FireMap:
             return -100
         
         elif self.time > 300:
+            self.time = 0
+            self.game_over = True
             return -50
         
         elif np.sum(self.state[:, :, INTENSITY] > 0) == 0:
+            self.game_over = True
             return 50
  
         else:
@@ -258,7 +261,7 @@ class FireMap:
 
             # moisture_added = 0.0
             # intensity_decreased = 0.0
-            # fires = np.array(np.where(self.state[:, :, INTENSITY] > 0))
+            fires = np.array(np.where(self.state[:, :, INTENSITY] > 0))
             # fires_pos = list(zip(fires[0], fires[1]))
 
             # for action_x, action_y in actions:
@@ -281,12 +284,12 @@ class FireMap:
             # #plt.show()
 
             # # Calculate reward based on distance fires are to the edge
-            # fires -= 45
-            # max_distance = np.max(np.abs(fires.flatten()))
+            fires -= 45
+            max_distance = np.max(np.abs(fires.flatten()))
 
-            # if max_distance >= 45:
-            #     self.game_over = True
-            #     max_distance *= 10
+            if max_distance >= 45:
+                self.game_over = True
+                #max_distance *= 10
 
             firemap_bonus = calc_fireside_bonus(self.prev_state, actions)
 
@@ -305,7 +308,8 @@ class FireMap:
             return total
     
     def get_info(self) -> dict:
-        return self.ring / np.sum(self.ring)
+        pass
+        #return self.ring / np.sum(self.ring)
 
     @staticmethod
     def _generate_kernel(windx: float, windy: float, kernel_size: float = KERNEL_SIZE, wind_speed: float = 1, intensity: float = KERNEL_INTENSITY) -> np.array:

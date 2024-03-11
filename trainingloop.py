@@ -18,16 +18,18 @@ from odds_and_ends.fireside_bonus import calc_fireside_bonus, calc_fireside_grid
 EPOCHS = 25
 NUM_MINIBATCHES = 32
 MINIBATCH = 16
-EPISODES = 100
+EPISODES = 500
 TS_PER_ITER = 2000
 
 # Continuous Parameters
 action_min = T.tensor((0.0, -1.0))
 action_max = T.tensor((1.0, 1.0))
 
-PPO_Agent = ContPPO(n_actions=6, c1=0.5, c2=0.5, input_dims=8100, action_min=action_min, action_max=action_max, 
+PPO_Agent = ContPPO(n_actions=6, c1=0.5, c2=0.5, input_dims=8464, action_min=action_min, action_max=action_max, 
                     gamma=0.99, gae_lambda=0.95, policy_clip=0.2, batch_size=MINIBATCH, 
                     buffer_size=MINIBATCH*NUM_MINIBATCHES, n_epochs=EPISODES, LR=1e-3, annealing=False)
+
+#PPO_Agent.load('PPO_Agent_Misc/Agent_weights_actor', 'PPO_Agent_Misc/Agent_weights_critic')
 
 env = FireMapEnv()
 env.reset()
@@ -43,10 +45,10 @@ ep_mean_rewards = []
 
 fireside = calc_fireside_grid(obs_1)
 #obs = process_env_for_agent(obs, fireside)
-obs = T.flatten(T.tensor(fireside, dtype=T.float32)).to(PPO_Agent.device)
+obs = T.unsqueeze(T.unsqueeze(T.tensor(fireside, dtype=T.float32), dim=0), dim=0).to(PPO_Agent.device)
 print(obs.shape)
 env.reset()
-for e in range(205):
+for e in tqdm.tqdm(range(EPISODES)):
     # Step one, get some sort of training running. 
     for _ in range(TS_PER_ITER):
         # Set prev observation
@@ -63,8 +65,7 @@ for e in range(205):
         obs_1, rewards, dones, _ = env.step(processed_actions)
         fireside = calc_fireside_grid(obs_1)
         #obs = process_env_for_agent(obs, fireside)
-        obs = T.flatten(T.tensor(fireside, dtype=T.float32)).to(PPO_Agent.device)
-
+        obs = T.unsqueeze(T.unsqueeze(T.tensor(fireside, dtype=T.float32), dim=0), dim=0).to(PPO_Agent.device)
 
         rewards = T.tensor(rewards, dtype=T.float32)
         if dones == True:
@@ -87,6 +88,8 @@ for e in range(205):
 
     print("Episode , ", e)
 
+PPO_Agent.save('PPO_Agent_Misc/Agent_weights')
+
 env.reset()
 for _ in range(30):
     for _ in range(10):
@@ -103,7 +106,7 @@ for _ in range(30):
         obs, rewards, dones, _ = env.step(processed_actions)
         fireside = calc_fireside_grid(obs)
         #obs = process_env_for_agent(obs, fireside)
-        obs = T.flatten(T.tensor(fireside, dtype=T.float32)).to(PPO_Agent.device)
+        obs = T.unsqueeze(T.unsqueeze(T.tensor(fireside, dtype=T.float32), dim=0), dim=0).to(PPO_Agent.device)
 
         if dones == True:
             env.reset()
@@ -112,7 +115,6 @@ for _ in range(30):
         #print(f"{rewards = }")
 
         env.render()
-
 
 env.close()
 

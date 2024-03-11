@@ -8,7 +8,7 @@ import seaborn as sns
 import tqdm
 
 
-env = gym.make("LunarLander-v2", continuous=True)
+env = gym.make("CarRacing-v2")
 
 episode_seed = np.random.randint(0, 100)
 observation, info = env.reset(seed=episode_seed)
@@ -17,7 +17,7 @@ observation, info = env.reset(seed=episode_seed)
 EPOCHS = 25
 NUM_MINIBATCHES = 32
 MINIBATCH = 16
-EPISODES = 100
+EPISODES = 400
 TS_PER_ITER = 2000
 
 # Continuous Parameters
@@ -25,12 +25,13 @@ action_min = T.tensor((0.0, -1.0))
 action_max = T.tensor((1.0, 1.0))
 
 
-PPO_Agent = ContPPO(n_actions=2, c1=0.5, c2=0.1, input_dims=8, action_min=action_min, action_max=action_max, 
+PPO_Agent = ContPPO(n_actions=3, c1=0.5, c2=0.1, input_dims=9216, action_min=action_min, action_max=action_max, 
                     gamma=0.99, gae_lambda=0.95, policy_clip=0.2, batch_size=MINIBATCH, 
                     buffer_size=MINIBATCH*NUM_MINIBATCHES, n_epochs=EPISODES, LR=1e-3, annealing=False)
 
 action = env.action_space.sample()
 obs, rewards, dones, info, _ = env.step(action)
+print(obs.shape)
 
 full_episode_loss = []
 avg_policy_loss = []
@@ -38,9 +39,10 @@ avg_crit_loss = []
 episode_max_ratio = []
 ep_mean_rewards = []
 
-obs = T.tensor(obs).to(PPO_Agent.device)
+obs = T.tensor(np.expand_dims(np.swapaxes(obs, 2, 0), axis=0)).float().to(PPO_Agent.device)
+print(obs.shape)
 
-for episode in tqdm.tqdm(range(50)):
+for episode in tqdm.tqdm(range(EPISODES)):
     episode_loss = 0.0
     episode_policy_loss = 0.0
     episode_crit_loss = 0.0
@@ -51,7 +53,7 @@ for episode in tqdm.tqdm(range(50)):
         action, logprob, mean, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
         obs, rewards, dones, info, _ = env.step(action.numpy())
 
-        obs = T.tensor(obs).to(PPO_Agent.device)
+        obs = T.tensor(np.expand_dims(np.swapaxes(obs, 2, 0), axis=0)).float().to(PPO_Agent.device)
 
         next_vf = PPO_Agent.critic.forward(obs)
         advantage = PPO_Agent.get_gae(rewards, prev_vf, next_vf)
@@ -90,20 +92,20 @@ env.close()
 
 
 # Render games at the end
-env = gym.make("LunarLander-v2", continuous=True, render_mode="human")
+env = gym.make("CarRacing-v2", render_mode="human")
 
 env.reset()
 action = env.action_space.sample()
 obs, rewards, dones, info, _ = env.step(action)
 
-obs = T.tensor(obs, dtype=T.float32)
+obs = T.tensor(np.expand_dims(np.swapaxes(obs, 2, 0), axis=0)).float().to(PPO_Agent.device)
 
 for e in range(TS_PER_ITER):
     prev_obs = obs.clone().detach()
     action, logprob, mean, prev_vf = PPO_Agent.get_action_and_vf(prev_obs)
     print(action)
     obs, rewards, dones, info, _ = env.step(np.array(action))
-    obs = T.tensor(obs).to(PPO_Agent.device)
+    obs = T.tensor(np.expand_dims(np.swapaxes(obs, 2, 0), axis=0)).float().to(PPO_Agent.device)
 
     ep_tot_rewards += rewards
 
